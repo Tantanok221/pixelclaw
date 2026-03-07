@@ -1,10 +1,8 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
+node_modules/
 dist/
-wheels/
-*.egg-info
+coverage/
 
-# Virtual environments
-.venv
+.env
+.env.local
+.env.*.local
+auth.json

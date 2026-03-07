@@ -1,0 +1,43 @@
+{
+  "name": "pixelbot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pixelbot",
+  "keywords": [
+    "pi-ai",
+    "pixelbot",
+    "typescript"
+  ],
+  "license": "ISC",
+  "author": "",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "oxlint .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "osfmt": "oxfmt ."
+  },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.56.3",
+    "@mariozechner/pi-ai": "^0.56.3",
+    "dotenv": "^17.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.2",
+    "oxfmt": "^0.35.0",
+    "oxlint": "^1.50.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
