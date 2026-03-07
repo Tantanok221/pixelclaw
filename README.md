@@ -1,6 +1,6 @@
-# Pixelbot
+# Pixelclaw
 
-TypeScript Node.js starter for building your own Pixelbot with PI AI packages.
+Minimal Turborepo workspace for building agent packages with PI AI packages.
 
 ## Requirements
 
@@ -23,8 +23,16 @@ npm run build
 npm run start -- "Say hi from pixelbot"
 
 npm run test
+npm run typecheck
 npm run lint
 npm run format
 npm run format:check
 npm run osfmt
+```
+
+## Workspace Layout
+
+```text
+packages/
+  agent/    Current Pixelbot runtime and tests
 ```

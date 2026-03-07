@@ -2,6 +2,7 @@ import "dotenv/config";
 import { Agent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import { getConfiguredModel, getProviderApiKey } from "./ModelProvider.js";
 import { createAgentTools } from "./tools/index.js";
+import { findWorkspaceRoot } from "./workspaceRoot.js";
 
 const SYSTEM_PROMPT = [
   "You are Pixelbot, a concise and helpful assistant.",
@@ -12,11 +13,12 @@ const SYSTEM_PROMPT = [
 
 export async function runAgentPrompt(prompt: string): Promise<string> {
   const textChunks: string[] = [];
+  const workspaceRoot = await findWorkspaceRoot(process.cwd());
   const agent = new Agent({
     initialState: {
       systemPrompt: SYSTEM_PROMPT,
       model: getConfiguredModel(),
-      tools: createAgentTools(process.cwd()),
+      tools: createAgentTools(workspaceRoot),
     },
     getApiKey: async () => getProviderApiKey(),
   });
