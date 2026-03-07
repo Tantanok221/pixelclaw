@@ -33,15 +33,52 @@ interface FrontmatterResult {
   body: string;
 }
 
+export class SkillLoader {
+  constructor(
+    private readonly cwd: string,
+    private readonly options: SkillDiscoveryOptions = {},
+  ) {}
+
+  async discoverSkills(): Promise<SkillSummary[]> {
+    const registry = await this.buildSkillRegistry();
+
+    return Array.from(registry.values())
+      .map(({ content: _content, ...summary }) => summary)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async loadSkillByName(name: string): Promise<LoadedSkill> {
+    const registry = await this.buildSkillRegistry();
+    const match = registry.get(normalizeSkillName(name));
+
+    if (!match) {
+      throw new Error(`Skill not found: ${name}`);
+    }
+
+    return match;
+  }
+
+  private async buildSkillRegistry(): Promise<Map<string, ParsedSkillFile>> {
+    const roots = resolveSkillRoots(this.cwd, this.options);
+    const registry = new Map<string, ParsedSkillFile>();
+
+    for (const skill of await scanSkillRoot(roots.globalRoot, "global")) {
+      registry.set(normalizeSkillName(skill.name), skill);
+    }
+
+    for (const skill of await scanSkillRoot(roots.localRoot, "local")) {
+      registry.set(normalizeSkillName(skill.name), skill);
+    }
+
+    return registry;
+  }
+}
+
 export async function discoverSkills(
   cwd: string,
   options: SkillDiscoveryOptions = {},
 ): Promise<SkillSummary[]> {
-  const registry = await buildSkillRegistry(cwd, options);
-
-  return Array.from(registry.values())
-    .map(({ content: _content, ...summary }) => summary)
-    .sort((left, right) => left.name.localeCompare(right.name));
+  return new SkillLoader(cwd, options).discoverSkills();
 }
 
 export async function loadSkillByName(
@@ -49,32 +86,7 @@ export async function loadSkillByName(
   cwd: string,
   options: SkillDiscoveryOptions = {},
 ): Promise<LoadedSkill> {
-  const registry = await buildSkillRegistry(cwd, options);
-  const match = registry.get(normalizeSkillName(name));
-
-  if (!match) {
-    throw new Error(`Skill not found: ${name}`);
-  }
-
-  return match;
-}
-
-async function buildSkillRegistry(
-  cwd: string,
-  options: SkillDiscoveryOptions,
-): Promise<Map<string, ParsedSkillFile>> {
-  const roots = resolveSkillRoots(cwd, options);
-  const registry = new Map<string, ParsedSkillFile>();
-
-  for (const skill of await scanSkillRoot(roots.globalRoot, "global")) {
-    registry.set(normalizeSkillName(skill.name), skill);
-  }
-
-  for (const skill of await scanSkillRoot(roots.localRoot, "local")) {
-    registry.set(normalizeSkillName(skill.name), skill);
-  }
-
-  return registry;
+  return new SkillLoader(cwd, options).loadSkillByName(name);
 }
 
 function resolveSkillRoots(cwd: string, options: SkillDiscoveryOptions) {

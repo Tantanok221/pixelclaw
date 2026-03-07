@@ -1,6 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@mariozechner/pi-ai";
-import { discoverSkills } from "../skills/index.js";
+import { SkillLoader } from "../skills/index.js";
 
 const listSkillSchema = Type.Object({});
 
@@ -11,7 +11,7 @@ export function createListSkillTool(cwd: string): AgentTool<typeof listSkillSche
     description: "List available skills from global and project-local skill directories.",
     parameters: listSkillSchema,
     execute: async () => {
-      const skills = await discoverSkills(cwd);
+      const skills = await new SkillLoader(cwd).discoverSkills();
 
       if (skills.length === 0) {
         return {

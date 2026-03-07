@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentTools } from "../src/tools/index.js";
-import { discoverSkills, loadSkillByName } from "../src/skills/index.js";
+import { SkillLoader, discoverSkills, loadSkillByName } from "../src/skills/index.js";
 
 const tempDirs: string[] = [];
 
@@ -64,6 +64,55 @@ plan body`,
     expect(skills).toHaveLength(2);
     expect(skills.map((skill) => skill.name)).toEqual(["debugging", "planning"]);
     expect(skills.map((skill) => skill.scope)).toEqual(["global", "local"]);
+  });
+
+  it("supports class-based discovery and loading", async () => {
+    const homeDir = await createTempDir("pixelbot-home-");
+    const projectDir = await createTempDir("pixelbot-project-");
+    const globalRoot = path.join(homeDir, ".agents", "skills");
+    const localRoot = path.join(projectDir, ".agents", "skills");
+
+    await writeSkill(
+      globalRoot,
+      "debugging",
+      `---
+name: debugging
+description: Global debugging workflow
+---
+global body`,
+    );
+
+    await writeSkill(
+      localRoot,
+      "planning",
+      `---
+name: planning
+description: Local planning workflow
+---
+plan body`,
+    );
+
+    const loader = new SkillLoader(projectDir, { globalRoot, localRoot });
+
+    await expect(loader.discoverSkills()).resolves.toMatchObject([
+      {
+        name: "debugging",
+        description: "Global debugging workflow",
+        scope: "global",
+      },
+      {
+        name: "planning",
+        description: "Local planning workflow",
+        scope: "local",
+      },
+    ]);
+
+    await expect(loader.loadSkillByName("planning")).resolves.toMatchObject({
+      name: "planning",
+      description: "Local planning workflow",
+      scope: "local",
+      content: "plan body",
+    });
   });
 
   it("prefers project-local skills over global ones", async () => {
