@@ -79,8 +79,8 @@ async function buildSkillRegistry(
 
 function resolveSkillRoots(cwd: string, options: SkillDiscoveryOptions) {
   return {
-    globalRoot: options.globalRoot ?? path.join(os.homedir(), ".agent", "skills"),
-    localRoot: options.localRoot ?? path.join(cwd, ".agent", "skills"),
+    globalRoot: options.globalRoot ?? path.join(os.homedir(), ".agents", "skills"),
+    localRoot: options.localRoot ?? path.join(cwd, ".agents", "skills"),
   };
 }
 

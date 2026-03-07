@@ -18,7 +18,7 @@ export function createListSkillTool(cwd: string): AgentTool<typeof listSkillSche
           content: [
             {
               type: "text",
-              text: "No skills found in ~/.agent/skills or ./.agent/skills.",
+              text: "No skills found in ~/.agents/skills or ./.agents/skills.",
             },
           ],
           details: undefined,

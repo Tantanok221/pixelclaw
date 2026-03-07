@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentTools } from "../src/tools/index.js";
 import { discoverSkills, loadSkillByName } from "../src/skills/index.js";
 
@@ -20,6 +20,7 @@ async function writeSkill(root: string, name: string, content: string) {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
       await import("node:fs/promises").then(({ rm }) =>
@@ -30,11 +31,46 @@ afterEach(async () => {
 });
 
 describe("skill discovery", () => {
+  it("discovers skills from default .agents roots", async () => {
+    const homeDir = await createTempDir("pixelbot-home-");
+    const projectDir = await createTempDir("pixelbot-project-");
+    const globalRoot = path.join(homeDir, ".agents", "skills");
+    const localRoot = path.join(projectDir, ".agents", "skills");
+
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+
+    await writeSkill(
+      globalRoot,
+      "debugging",
+      `---
+name: debugging
+description: Global debugging workflow
+---
+global body`,
+    );
+
+    await writeSkill(
+      localRoot,
+      "planning",
+      `---
+name: planning
+description: Local planning workflow
+---
+plan body`,
+    );
+
+    const skills = await discoverSkills(projectDir);
+
+    expect(skills).toHaveLength(2);
+    expect(skills.map((skill) => skill.name)).toEqual(["debugging", "planning"]);
+    expect(skills.map((skill) => skill.scope)).toEqual(["global", "local"]);
+  });
+
   it("prefers project-local skills over global ones", async () => {
     const homeDir = await createTempDir("pixelbot-home-");
     const projectDir = await createTempDir("pixelbot-project-");
-    const globalRoot = path.join(homeDir, ".agent", "skills");
-    const localRoot = path.join(projectDir, ".agent", "skills");
+    const globalRoot = path.join(homeDir, ".agents", "skills");
+    const localRoot = path.join(projectDir, ".agents", "skills");
 
     await writeSkill(
       globalRoot,
