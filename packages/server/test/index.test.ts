@@ -9,7 +9,7 @@ describe("resolveDatabasePath", () => {
     delete process.env.DATABASE_PATH;
 
     await expect(resolveDatabasePath()).resolves.toBe(
-      path.join("/tmp/pixel-home", ".pixelclaw", "system", "pixelclaw.sqlite"),
+      path.join("/tmp/pixel-home", ".pixelclaw", "workspace", "system", "pixelclaw.sqlite"),
     );
   });
 

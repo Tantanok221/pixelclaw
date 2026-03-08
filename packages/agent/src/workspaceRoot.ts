@@ -22,7 +22,7 @@ export async function findWorkspaceRoot(startDir: string): Promise<string> {
 export function resolveAgentWorkspaceRoot() {
   return process.env.PIXELCLAW_HOME
     ? path.resolve(process.env.PIXELCLAW_HOME)
-    : path.join(os.homedir(), ".pixelclaw");
+    : path.join(os.homedir(), ".pixelclaw", "workspace");
 }
 
 export async function ensureAgentWorkspaceRoot() {
