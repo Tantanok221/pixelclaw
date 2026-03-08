@@ -22,6 +22,7 @@ export const TELEGRAM_MESSAGES = {
   startedNewChat: "Started a new chat.",
   stopping: "Stopping current activity.",
   nothingToStop: "Nothing is currently running.",
+  streamingPlaceholder: "...",
   stoppedReply: "Stopped.",
   stoppedError: "Stopped by user.",
 } as const;
