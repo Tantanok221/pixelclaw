@@ -8,6 +8,7 @@
     "packages/*"
   ],
   "scripts": {
+    "auth:agent": "npm run auth:agent --workspace=cli --",
     "dev": "turbo run dev --parallel --filter=server --filter=web",
     "dev:server": "npm run dev --workspace=server",
     "dev:web": "npm run dev --workspace=web",

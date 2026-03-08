@@ -6,6 +6,7 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
+    "auth:agent": "tsx src/auth.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "pair:telegram": "tsx src/index.ts",

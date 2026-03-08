@@ -40,9 +40,25 @@ Telegram access is gated per Telegram user. The first message from an unpaired u
 npm run pair:telegram -- <pairing-code>
 ```
 
+## Agent Auth
+
+Pixelclaw stores agent OAuth credentials in:
+
+```text
+$PIXELCLAW_HOME/system/auth.json
+~/.pixelclaw/system/auth.json
+```
+
+To log the agent runtime into OpenAI Codex and save the credentials there, run:
+
+```bash
+npm run auth:agent
+```
+
 ## Scripts
 
 ```bash
+npm run auth:agent
 npm run dev
 
 npm run dev:web
