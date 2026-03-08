@@ -1,6 +1,7 @@
 import { Agent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { getConfiguredModel, getProviderApiKey } from "./ModelProvider.js";
+import type { TodoDocument } from "./todos/store.js";
 import { createAgentTools } from "./tools/index.js";
 import { ensureAgentWorkspaceRoot } from "./workspaceRoot.js";
 
@@ -10,8 +11,14 @@ export interface ThreadMessageInput {
   createdAt?: string;
 }
 
+export type AgentRunState = "planning" | "running_tool" | "waiting_for_model" | "finalizing";
+
 export type AgentRunEvent =
   | { type: "run.started" }
+  | { type: "run.state.changed"; state: AgentRunState }
+  | { type: "tool.started"; toolName: string; args: unknown }
+  | { type: "tool.completed"; toolName: string; args: unknown; isError: boolean }
+  | { type: "todo.updated"; todoDocument: TodoDocument }
   | { type: "message.delta"; delta: string }
   | { type: "message.completed"; text: string }
   | { type: "run.failed"; error: string };
@@ -34,11 +41,26 @@ const SYSTEM_PROMPT = [
 export async function runAgentThread(options: RunThreadOptions): Promise<{ text: string }> {
   const textChunks: string[] = [];
   const workspaceRoot = await ensureAgentWorkspaceRoot();
+  let currentState: AgentRunState | undefined;
+  const toolArgsByCallId = new Map<string, unknown>();
+  const emitState = (state: AgentRunState) => {
+    if (currentState === state) {
+      return;
+    }
+
+    currentState = state;
+    options.onEvent?.({ type: "run.state.changed", state });
+  };
   const agent = new Agent({
     initialState: {
       systemPrompt: SYSTEM_PROMPT,
       model: getConfiguredModel(),
-      tools: createAgentTools(workspaceRoot),
+      tools: createAgentTools(workspaceRoot, {
+        sessionId: options.sessionId,
+        onTodoUpdate: (todoDocument) => {
+          options.onEvent?.({ type: "todo.updated", todoDocument });
+        },
+      }),
       messages: options.messages.map(toAgentMessage),
     },
     sessionId: options.sessionId,
@@ -58,18 +80,49 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
   options.signal?.addEventListener("abort", abortAgent, { once: true });
 
   const unsubscribe = agent.subscribe((event) => {
+    if (event.type === "turn_start") {
+      emitState("planning");
+      return;
+    }
+
+    if (event.type === "tool_execution_start") {
+      toolArgsByCallId.set(event.toolCallId, event.args);
+      emitState("running_tool");
+      options.onEvent?.({
+        type: "tool.started",
+        toolName: event.toolName,
+        args: event.args,
+      });
+      return;
+    }
+
+    if (event.type === "tool_execution_end") {
+      const args = toolArgsByCallId.get(event.toolCallId);
+      toolArgsByCallId.delete(event.toolCallId);
+      options.onEvent?.({
+        type: "tool.completed",
+        toolName: event.toolName,
+        args,
+        isError: event.isError,
+      });
+      emitState("waiting_for_model");
+      return;
+    }
+
     if (event.type !== "message_update") {
       return;
     }
 
     const streamEvent = event.assistantMessageEvent;
     if (streamEvent.type === "text_delta") {
+      emitState("finalizing");
       textChunks.push(streamEvent.delta);
       options.onEvent?.({ type: "message.delta", delta: streamEvent.delta });
       return;
     }
 
     if (streamEvent.type === "done") {
+      emitState("finalizing");
       const text = getAssistantText(streamEvent.message);
       options.onEvent?.({ type: "message.completed", text });
       return;

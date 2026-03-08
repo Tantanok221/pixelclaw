@@ -1,6 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type, type Static } from "@mariozechner/pi-ai";
-import { TodoStore, isTodoStatus } from "../todos/store.js";
+import { TodoStore, type TodoDocument, isTodoStatus } from "../todos/store.js";
 
 const writeTodoSchema = Type.Object({
   todos: Type.Array(
@@ -15,7 +15,14 @@ const writeTodoSchema = Type.Object({
 
 type WriteTodoInput = Static<typeof writeTodoSchema>;
 
-export function createWriteTodoTool(store: TodoStore): AgentTool<typeof writeTodoSchema> {
+export interface WriteTodoToolOptions {
+  onUpdated?: (document: TodoDocument) => void | Promise<void>;
+}
+
+export function createWriteTodoTool(
+  store: TodoStore,
+  options: WriteTodoToolOptions = {},
+): AgentTool<typeof writeTodoSchema> {
   return {
     name: "write_todo",
     label: "write_todo",
@@ -29,6 +36,7 @@ export function createWriteTodoTool(store: TodoStore): AgentTool<typeof writeTod
         note: todo.note,
       }));
       const document = await store.writeTodo(normalizedTodos);
+      await options.onUpdated?.(document);
       return {
         content: [{ type: "text", text: JSON.stringify(document, null, 2) }],
         details: undefined,

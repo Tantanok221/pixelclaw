@@ -1,6 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { randomUUID } from "node:crypto";
-import { TodoStore } from "../todos/store.js";
+import { TodoStore, type TodoDocument } from "../todos/store.js";
 import { createBashTool } from "./bash.js";
 import { createEditTool } from "./edit.js";
 import { createFindTool } from "./find.js";
@@ -14,15 +14,20 @@ import { createUpdateTodoTool } from "./updateTodo.js";
 import { createWriteTool } from "./write.js";
 import { createWriteTodoTool } from "./writeTodo.js";
 
-export function createAgentTools(cwd: string): AgentTool<any>[] {
-  const todoStore = new TodoStore({ sessionId: randomUUID() });
+export interface CreateAgentToolsOptions {
+  sessionId?: string;
+  onTodoUpdate?: (document: TodoDocument) => void | Promise<void>;
+}
+
+export function createAgentTools(cwd: string, options: CreateAgentToolsOptions = {}): AgentTool<any>[] {
+  const todoStore = new TodoStore({ sessionId: options.sessionId ?? randomUUID() });
 
   return [
     createListSkillTool(cwd),
     createLoadSkillTool(cwd),
     createReadTodoTool(todoStore),
-    createWriteTodoTool(todoStore),
-    createUpdateTodoTool(todoStore),
+    createWriteTodoTool(todoStore, { onUpdated: options.onTodoUpdate }),
+    createUpdateTodoTool(todoStore, { onUpdated: options.onTodoUpdate }),
     createReadTool(cwd),
     createBashTool(cwd),
     createEditTool(cwd),

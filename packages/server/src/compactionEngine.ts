@@ -1,12 +1,13 @@
 import { runCompactionSummary } from "../../agent/src/compaction.js";
+import {
+  COMPACTION_CONTEXT_LIMIT_TOKENS,
+  COMPACTION_PRESERVE_LAST_TURNS,
+  COMPACTION_TRIGGER_PERCENT,
+  ESTIMATED_MESSAGE_OVERHEAD_TOKENS,
+  ESTIMATED_SYSTEM_PROMPT_TOKENS,
+} from "./constants.js";
 import type { ChatRepository } from "./repository.js";
 import type { SessionRow, ThreadRow } from "./schema.js";
-
-export const COMPACTION_CONTEXT_LIMIT_TOKENS = 128_000;
-export const COMPACTION_TRIGGER_PERCENT = 0.95;
-export const COMPACTION_PRESERVE_LAST_TURNS = 6;
-const ESTIMATED_SYSTEM_PROMPT_TOKENS = 256;
-const ESTIMATED_MESSAGE_OVERHEAD_TOKENS = 12;
 
 export interface CompactionMessage {
   role: "user" | "assistant";

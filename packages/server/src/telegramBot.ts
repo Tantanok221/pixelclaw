@@ -1,22 +1,17 @@
+import type { AgentRunState } from "../../agent/src/runtime.js";
+import type { TodoItem, TodoStatus } from "../../agent/src/todos/store.js";
 import { compactionEngine, type CompactionEngine } from "./compactionEngine.js";
+import {
+  TELEGRAM_COMMANDS,
+  TELEGRAM_MESSAGES,
+  TELEGRAM_POLL_TIMEOUT_SECONDS,
+  TELEGRAM_RETRY_DELAY_MS,
+  TELEGRAM_STATUS_DELETE_DELAY_MS,
+  TELEGRAM_WHIMSICAL_HEADLINES,
+} from "./constants.js";
 import type { ChatRepository } from "./repository.js";
 import type { RunAgentOptions, ServerAgentMessage } from "./defaultAgentRunner.js";
 import { loadTelegramConfig } from "./telegramConfig.js";
-
-const DEFAULT_MAX_MESSAGE_LENGTH = 4096;
-const DEFAULT_EDIT_INTERVAL_MS = 400;
-const DEFAULT_POLL_TIMEOUT_SECONDS = 30;
-const DEFAULT_RETRY_DELAY_MS = 1000;
-const DEFAULT_PLACEHOLDER_TEXT = "...";
-const HELP_CHAT_COMMAND = "/help";
-const NEW_CHAT_COMMAND = "/new";
-const STOP_CHAT_COMMAND = "/stop";
-const HELP_MESSAGE =
-  "Available commands:\n/new - Start a new chat.\n/stop - Stop the current activity.";
-const STOPPING_MESSAGE = "Stopping current activity.";
-const NOTHING_TO_STOP_MESSAGE = "Nothing is currently running.";
-const STOPPED_REPLY_TEXT = "Stopped.";
-const STOPPED_ERROR_MESSAGE = "Stopped by user.";
 
 interface TelegramUpdate {
   updateId: number;
@@ -33,6 +28,7 @@ interface TelegramApiResult<T> {
 export interface TelegramTransport {
   sendMessage(chatId: string, text: string): Promise<{ messageId: number }>;
   editMessageText(chatId: string, messageId: number, text: string): Promise<void>;
+  deleteMessage(chatId: string, messageId: number): Promise<void>;
 }
 
 export interface TelegramPollingTransport extends TelegramTransport {
@@ -44,7 +40,9 @@ export interface TelegramPollingTransport extends TelegramTransport {
 }
 
 export interface TelegramStreamOptions {
+  completionDeleteDelayMs?: number;
   editIntervalMs?: number;
+  heartbeatIntervalMs?: number;
   maxMessageLength?: number;
   placeholderText?: string;
 }
@@ -69,25 +67,47 @@ export interface StartTelegramBotOptions {
   retryDelayMs?: number;
 }
 
+type TelegramDisplayState =
+  | "starting"
+  | "planning"
+  | "running tool"
+  | "waiting for model"
+  | "finalizing"
+  | "completed"
+  | "failed"
+  | "stopped";
+
+interface TelegramStatusSnapshot {
+  headline: string;
+  state: TelegramDisplayState;
+  startedAtMs: number;
+  toolName?: string;
+  target?: string;
+  lastToolName?: string;
+  lastTarget?: string;
+  todos: TodoItem[];
+  error?: string;
+}
+
 export async function handleTelegramMessage(options: HandleTelegramMessageOptions): Promise<void> {
   const text = options.text.trim();
   if (!text) {
     return;
   }
 
-  if (text === NEW_CHAT_COMMAND) {
+  if (text === TELEGRAM_COMMANDS.new) {
     await resetTelegramChatSession(options.repository, options.chatId);
-    await options.telegram.sendMessage(options.chatId, "Started a new chat.");
+    await options.telegram.sendMessage(options.chatId, TELEGRAM_MESSAGES.startedNewChat);
     return;
   }
 
-  if (text === HELP_CHAT_COMMAND) {
-    await options.telegram.sendMessage(options.chatId, HELP_MESSAGE);
+  if (text === TELEGRAM_COMMANDS.help) {
+    await options.telegram.sendMessage(options.chatId, TELEGRAM_MESSAGES.help);
     return;
   }
 
-  if (text === STOP_CHAT_COMMAND) {
-    await options.telegram.sendMessage(options.chatId, NOTHING_TO_STOP_MESSAGE);
+  if (text === TELEGRAM_COMMANDS.stop) {
+    await options.telegram.sendMessage(options.chatId, TELEGRAM_MESSAGES.nothingToStop);
     return;
   }
 
@@ -121,15 +141,45 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
     assistantMessageId: assistantMessage.id,
   });
 
-  const streamer = new TelegramReplyStreamer(options.telegram, options.chatId, options.streamOptions);
-  await streamer.start();
+  const statusSnapshot: TelegramStatusSnapshot = {
+    headline: nextWhimsicalHeadline(),
+    state: "starting",
+    startedAtMs: Date.now(),
+    todos: [],
+  };
+  const statusMessage = new TelegramStatusMessage(
+    options.telegram,
+    options.chatId,
+    options.streamOptions?.completionDeleteDelayMs ?? TELEGRAM_STATUS_DELETE_DELAY_MS,
+  );
+  await statusMessage.start(renderTelegramStatus(statusSnapshot));
 
   let assistantText = "";
   let hasCompletedEvent = false;
+  let hasSentFinalReply = false;
   let startedAt: string | null = null;
   let eventChain = Promise.resolve();
+
+  const syncStatus = async () => {
+    await statusMessage.update(renderTelegramStatus(statusSnapshot));
+  };
+
+  const sendFinalReply = async (finalText: string) => {
+    if (hasSentFinalReply) {
+      return;
+    }
+
+    hasSentFinalReply = true;
+    await options.telegram.sendMessage(options.chatId, finalText);
+    statusSnapshot.state = "completed";
+    statusSnapshot.error = undefined;
+    statusSnapshot.headline = nextWhimsicalHeadline();
+    await syncStatus();
+    statusMessage.deleteAfterDelay();
+  };
+
   const finalizeStoppedRun = async () => {
-    const finalText = assistantText || STOPPED_REPLY_TEXT;
+    const finalText = assistantText || TELEGRAM_MESSAGES.stoppedReply;
     await options.repository.updateMessage(assistantMessage.id, {
       content: finalText,
       status: "error",
@@ -138,9 +188,14 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
       status: "failed",
       startedAt,
       finishedAt: new Date().toISOString(),
-      error: STOPPED_ERROR_MESSAGE,
+      error: TELEGRAM_MESSAGES.stoppedError,
     });
-    await streamer.complete(finalText);
+    statusSnapshot.state = "stopped";
+    statusSnapshot.error = TELEGRAM_MESSAGES.stoppedError;
+    statusSnapshot.toolName ??= statusSnapshot.lastToolName;
+    statusSnapshot.target ??= statusSnapshot.lastTarget;
+    statusSnapshot.headline = nextWhimsicalHeadline();
+    await syncStatus();
   };
 
   try {
@@ -173,6 +228,41 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
             return;
           }
 
+          if (event.type === "run.state.changed") {
+            statusSnapshot.state = mapRunState(event.state);
+            statusSnapshot.headline = nextWhimsicalHeadline();
+            await syncStatus();
+            return;
+          }
+
+          if (event.type === "tool.started") {
+            statusSnapshot.state = "running tool";
+            statusSnapshot.toolName = event.toolName;
+            statusSnapshot.target = extractTelegramTarget(event.args);
+            statusSnapshot.lastToolName = statusSnapshot.toolName;
+            statusSnapshot.lastTarget = statusSnapshot.target;
+            statusSnapshot.error = undefined;
+            statusSnapshot.headline = nextWhimsicalHeadline();
+            await syncStatus();
+            return;
+          }
+
+          if (event.type === "tool.completed") {
+            statusSnapshot.state = "waiting for model";
+            statusSnapshot.toolName = undefined;
+            statusSnapshot.target = undefined;
+            statusSnapshot.error = undefined;
+            statusSnapshot.headline = nextWhimsicalHeadline();
+            await syncStatus();
+            return;
+          }
+
+          if (event.type === "todo.updated") {
+            statusSnapshot.todos = event.todoDocument.todos;
+            await syncStatus();
+            return;
+          }
+
           if (event.type === "message.delta") {
             startedAt ??= new Date().toISOString();
             assistantText += event.delta;
@@ -185,7 +275,12 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
               startedAt,
               error: null,
             });
-            await streamer.append(event.delta);
+
+            if (statusSnapshot.state !== "finalizing") {
+              statusSnapshot.state = "finalizing";
+              statusSnapshot.headline = nextWhimsicalHeadline();
+              await syncStatus();
+            }
             return;
           }
 
@@ -203,7 +298,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
               finishedAt: new Date().toISOString(),
               error: null,
             });
-            await streamer.complete(assistantText);
+            await sendFinalReply(assistantText);
             return;
           }
 
@@ -217,11 +312,17 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
             finishedAt: new Date().toISOString(),
             error: event.error,
           });
-          await streamer.fail(assistantText || `Error: ${event.error}`);
+          statusSnapshot.state = "failed";
+          statusSnapshot.error = event.error;
+          statusSnapshot.toolName ??= statusSnapshot.lastToolName;
+          statusSnapshot.target ??= statusSnapshot.lastTarget;
+          statusSnapshot.headline = nextWhimsicalHeadline();
+          await syncStatus();
         });
 
         return eventChain;
       },
+      signal: options.signal,
     });
 
     await eventChain;
@@ -245,7 +346,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
         finishedAt: new Date().toISOString(),
         error: null,
       });
-      await streamer.complete(finalText);
+      await sendFinalReply(finalText);
     }
   } catch (error: unknown) {
     startedAt ??= new Date().toISOString();
@@ -266,10 +367,15 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
       finishedAt: new Date().toISOString(),
       error: message,
     });
-    await streamer.fail(assistantText || `Error: ${message}`);
+    statusSnapshot.state = "failed";
+    statusSnapshot.error = message;
+    statusSnapshot.toolName ??= statusSnapshot.lastToolName;
+    statusSnapshot.target ??= statusSnapshot.lastTarget;
+    statusSnapshot.headline = nextWhimsicalHeadline();
+    await syncStatus();
     throw error;
   } finally {
-    await streamer.dispose();
+    await statusMessage.dispose();
   }
 }
 
@@ -281,8 +387,8 @@ export async function startTelegramBot(
     return null;
   }
 
-  const pollTimeoutSeconds = options.pollTimeoutSeconds ?? DEFAULT_POLL_TIMEOUT_SECONDS;
-  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+  const pollTimeoutSeconds = options.pollTimeoutSeconds ?? TELEGRAM_POLL_TIMEOUT_SECONDS;
+  const retryDelayMs = options.retryDelayMs ?? TELEGRAM_RETRY_DELAY_MS;
   let isClosed = false;
   let updateOffset = 0;
   let activePollController: AbortController | undefined;
@@ -370,7 +476,7 @@ class TelegramUpdateCoordinator {
       return;
     }
 
-    if (update.text.trim() === STOP_CHAT_COMMAND) {
+    if (update.text.trim() === TELEGRAM_COMMANDS.stop) {
       this.trackTask(this.handleStopCommand(update));
       return;
     }
@@ -433,9 +539,9 @@ class TelegramUpdateCoordinator {
           chatId: update.chatId,
           text: update.text,
           repository: this.options.repository,
-          agentRunner: (options) =>
+          agentRunner: (agentOptions) =>
             this.options.agentRunner({
-              ...options,
+              ...agentOptions,
               signal: abortController.signal,
             }),
           telegram: this.options.telegram,
@@ -463,11 +569,17 @@ class TelegramUpdateCoordinator {
 
     state.activeRun?.abortController.abort();
 
-    const messageText = hasActiveRun || droppedUpdates.length ? STOPPING_MESSAGE : NOTHING_TO_STOP_MESSAGE;
+    const messageText =
+      hasActiveRun || droppedUpdates.length
+        ? TELEGRAM_MESSAGES.stopping
+        : TELEGRAM_MESSAGES.nothingToStop;
     await this.options.telegram.sendMessage(update.chatId, messageText);
 
     for (const droppedUpdate of droppedUpdates) {
-      await this.options.repository.markTelegramUpdateHandled(droppedUpdate.chatId, droppedUpdate.updateId);
+      await this.options.repository.markTelegramUpdateHandled(
+        droppedUpdate.chatId,
+        droppedUpdate.updateId,
+      );
     }
 
     await this.options.repository.markTelegramUpdateHandled(update.chatId, update.updateId);
@@ -510,196 +622,72 @@ class TelegramUpdateCoordinator {
   }
 }
 
-class TelegramReplyStreamer {
-  private readonly editIntervalMs: number;
-  private readonly maxMessageLength: number;
-  private readonly placeholderText: string;
-  private readonly messageIds: number[] = [];
-  private readonly messageTexts: string[] = [];
-  private readonly sentTexts: string[] = [];
-  private readonly pendingEdits = new Set<Promise<void>>();
-  private flushError: Error | undefined;
-  private flushChain: Promise<void> = Promise.resolve();
-  private flushTimer: NodeJS.Timeout | undefined;
-  private hasStarted = false;
+class TelegramStatusMessage {
+  private messageId: number | undefined;
+  private lastText = "";
+  private deleteTimer: NodeJS.Timeout | undefined;
 
   constructor(
     private readonly telegram: TelegramTransport,
     private readonly chatId: string,
-    options: TelegramStreamOptions = {},
-  ) {
-    this.editIntervalMs = options.editIntervalMs ?? DEFAULT_EDIT_INTERVAL_MS;
-    this.maxMessageLength = options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH;
-    this.placeholderText = options.placeholderText ?? DEFAULT_PLACEHOLDER_TEXT;
-  }
+    private readonly deleteDelayMs: number,
+  ) {}
 
-  async start() {
-    if (this.hasStarted) {
+  async start(text: string) {
+    if (this.messageId !== undefined) {
       return;
     }
 
-    const message = await this.telegram.sendMessage(this.chatId, this.placeholderText);
-    this.messageIds.push(message.messageId);
-    this.messageTexts.push("");
-    this.sentTexts.push(this.placeholderText);
-    this.hasStarted = true;
+    const message = await this.telegram.sendMessage(this.chatId, text);
+    this.messageId = message.messageId;
+    this.lastText = text;
   }
 
-  async append(delta: string) {
-    this.throwIfFlushFailed();
-
-    if (!delta) {
+  async update(text: string) {
+    await this.start(text);
+    if (this.messageId === undefined || this.lastText === text) {
       return;
     }
 
-    await this.start();
-    this.appendToChunks(delta);
-    await this.queueFlush(false);
+    await this.telegram.editMessageText(this.chatId, this.messageId, text);
+    this.lastText = text;
   }
 
-  async complete(text: string) {
-    this.throwIfFlushFailed();
-    await this.start();
-
-    if (text && text !== this.messageTexts.join("")) {
-      this.resetChunks(splitText(text, this.maxMessageLength));
-    }
-
-    await this.queueFlush(true);
-  }
-
-  async fail(text: string) {
-    this.throwIfFlushFailed();
-
-    if (text) {
-      await this.complete(text);
+  deleteAfterDelay() {
+    if (this.messageId === undefined) {
       return;
     }
 
-    await this.dispose();
+    if (this.deleteTimer) {
+      clearTimeout(this.deleteTimer);
+    }
+
+    this.deleteTimer = setTimeout(() => {
+      void this.deleteNow().catch((error) => {
+        console.error("Telegram status cleanup failed", error);
+      });
+    }, this.deleteDelayMs);
   }
 
   async dispose() {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = undefined;
-    }
-
-    await this.enqueueFlush();
-    await Promise.all(this.pendingEdits);
-    this.throwIfFlushFailed();
-  }
-
-  private appendToChunks(delta: string) {
-    let remaining = delta;
-
-    while (remaining) {
-      const index = this.messageTexts.length - 1;
-      const current = index >= 0 ? this.messageTexts[index] ?? "" : "";
-      const available = this.maxMessageLength - current.length;
-
-      if (available <= 0 || (current.length > 0 && remaining.length > available)) {
-        this.messageTexts.push("");
-        this.sentTexts.push("");
-        continue;
-      }
-
-      const nextSlice = remaining.slice(0, available);
-      if (index >= 0) {
-        this.messageTexts[index] = `${current}${nextSlice}`;
-      } else {
-        this.messageTexts.push(nextSlice);
-        this.sentTexts.push("");
-      }
-      remaining = remaining.slice(nextSlice.length);
-
-      if (remaining && (this.messageTexts.at(-1)?.length ?? 0) >= this.maxMessageLength) {
-        this.messageTexts.push("");
-        this.sentTexts.push("");
-      }
+    if (this.deleteTimer) {
+      return;
     }
   }
 
-  private resetChunks(chunks: string[]) {
-    this.messageTexts.length = 0;
-    this.sentTexts.length = 0;
-
-    for (const chunk of chunks) {
-      this.messageTexts.push(chunk);
-      this.sentTexts.push("");
+  private async deleteNow() {
+    if (this.deleteTimer) {
+      clearTimeout(this.deleteTimer);
+      this.deleteTimer = undefined;
     }
 
-    if (!this.messageTexts.length) {
-      this.messageTexts.push("");
-      this.sentTexts.push("");
-    }
-  }
-
-  private async queueFlush(force: boolean) {
-    if (force || this.editIntervalMs <= 0) {
-      await this.enqueueFlush();
+    if (this.messageId === undefined) {
       return;
     }
 
-    if (this.flushTimer) {
-      return;
-    }
-
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = undefined;
-      void this.enqueueFlush().catch((error: unknown) => {
-        this.flushError = error instanceof Error ? error : new Error(String(error));
-      });
-    }, this.editIntervalMs);
-  }
-
-  private enqueueFlush() {
-    const nextFlush = this.flushChain.catch(() => undefined).then(async () => {
-      this.throwIfFlushFailed();
-      await this.flush();
-    });
-
-    this.flushChain = nextFlush;
-    return nextFlush;
-  }
-
-  private async flush() {
-    await this.ensureMessageCount(this.messageTexts.length || 1);
-
-    for (let index = 0; index < this.messageTexts.length; index += 1) {
-      const nextText = this.messageTexts[index];
-      if (!nextText || this.sentTexts[index] === nextText) {
-        continue;
-      }
-
-      const editPromise = this.telegram
-        .editMessageText(this.chatId, this.messageIds[index]!, nextText)
-        .then(() => {
-          this.sentTexts[index] = nextText;
-        })
-        .finally(() => {
-          this.pendingEdits.delete(editPromise);
-        });
-
-      this.pendingEdits.add(editPromise);
-      await editPromise;
-    }
-  }
-
-  private async ensureMessageCount(count: number) {
-    while (this.messageIds.length < count) {
-      const message = await this.telegram.sendMessage(this.chatId, this.placeholderText);
-      this.messageIds.push(message.messageId);
-      if (this.sentTexts.length < this.messageIds.length) {
-        this.sentTexts.push(this.placeholderText);
-      }
-    }
-  }
-
-  private throwIfFlushFailed() {
-    if (this.flushError) {
-      throw this.flushError;
-    }
+    const messageId = this.messageId;
+    this.messageId = undefined;
+    await this.telegram.deleteMessage(this.chatId, messageId);
   }
 }
 
@@ -717,7 +705,9 @@ function createTelegramClient(botToken: string): TelegramPollingTransport {
 
   return {
     async getUpdates(offset, timeoutSeconds, signal) {
-      const response = await postTelegram<TelegramApiResult<Array<{ update_id: number; message?: { chat?: { id?: number | string }; text?: string } }>>>(
+      const response = await postTelegram<
+        TelegramApiResult<Array<{ update_id: number; message?: { chat?: { id?: number | string }; text?: string } }>>
+      >(
         `${baseUrl}/getUpdates`,
         {
           offset,
@@ -762,6 +752,12 @@ function createTelegramClient(botToken: string): TelegramPollingTransport {
         chat_id: chatId,
         message_id: messageId,
         text,
+      });
+    },
+    async deleteMessage(chatId, messageId) {
+      await postTelegram(`${baseUrl}/deleteMessage`, {
+        chat_id: chatId,
+        message_id: messageId,
       });
     },
   };
@@ -825,20 +821,95 @@ async function postTelegram<T>(
   return responsePayload as T;
 }
 
-function splitText(text: string, maxMessageLength: number) {
-  if (!text) {
-    return [];
+function renderTelegramStatus(snapshot: TelegramStatusSnapshot) {
+  const lines = [snapshot.headline, `State: ${snapshot.state}`];
+  const toolName = snapshot.toolName ?? (isRetainedState(snapshot.state) ? snapshot.lastToolName : undefined);
+  const target = snapshot.target ?? (isRetainedState(snapshot.state) ? snapshot.lastTarget : undefined);
+
+  if (toolName) {
+    lines.push(`Tool: ${toolName}`);
   }
 
-  const chunks: string[] = [];
-  let cursor = 0;
-
-  while (cursor < text.length) {
-    chunks.push(text.slice(cursor, cursor + maxMessageLength));
-    cursor += maxMessageLength;
+  if (target) {
+    lines.push(`Target: ${target}`);
   }
 
-  return chunks;
+  if (snapshot.todos.length > 0) {
+    lines.push("Todos:");
+    for (const todo of snapshot.todos) {
+      lines.push(`${todoStatusEmoji(todo.status)} ${todo.text}`);
+    }
+  }
+
+  if (snapshot.error) {
+    lines.push(`Error: ${snapshot.error}`);
+  }
+
+  lines.push(`Elapsed: ${formatElapsed(Date.now() - snapshot.startedAtMs)}`);
+  return lines.join("\n");
+}
+
+function mapRunState(state: AgentRunState): TelegramDisplayState {
+  switch (state) {
+    case "planning":
+      return "planning";
+    case "running_tool":
+      return "running tool";
+    case "waiting_for_model":
+      return "waiting for model";
+    case "finalizing":
+      return "finalizing";
+  }
+}
+
+function extractTelegramTarget(args: unknown) {
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+
+  const candidate = args as Record<string, unknown>;
+  for (const key of ["path", "command", "name", "pattern", "query", "glob"]) {
+    if (typeof candidate[key] === "string" && candidate[key]) {
+      return candidate[key] as string;
+    }
+  }
+
+  return undefined;
+}
+
+function todoStatusEmoji(status: TodoStatus) {
+  switch (status) {
+    case "pending":
+      return "⏳";
+    case "in_progress":
+      return "🔧";
+    case "done":
+      return "✅";
+    case "blocked":
+      return "🚫";
+  }
+}
+
+function nextWhimsicalHeadline() {
+  return TELEGRAM_WHIMSICAL_HEADLINES[
+    Math.floor(Math.random() * TELEGRAM_WHIMSICAL_HEADLINES.length)
+  ]!;
+}
+
+function isRetainedState(state: TelegramDisplayState) {
+  return state === "failed" || state === "stopped";
+}
+
+function formatElapsed(durationMs: number) {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) {
+    return `${seconds}s`;
+  }
+
+  return `${minutes}m ${seconds}s`;
 }
 
 function delay(durationMs: number) {

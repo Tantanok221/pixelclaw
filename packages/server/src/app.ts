@@ -2,12 +2,11 @@ import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import { compactionEngine, type CompactionEngine } from "./compactionEngine.js";
+import { SESSION_COOKIE } from "./constants.js";
 import { createDatabase } from "./database.js";
 import { runDefaultAgentTurn, type RunAgentOptions, type ServerAgentMessage } from "./defaultAgentRunner.js";
 import { ChatRepository } from "./repository.js";
 import { startTelegramBot } from "./telegramBot.js";
-
-const SESSION_COOKIE = "pixelclaw_session";
 
 export interface BuildServerOptions {
   agentRunner?: (options: RunAgentOptions) => Promise<{ text: string }>;
@@ -177,6 +176,13 @@ export async function buildServer(options: BuildServerOptions = {}) {
       reply.raw.write(`event: ${event}\n`);
       reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
     };
+    const serializeEventData = (event: Exclude<Parameters<RunAgentOptions["onEvent"]>[0], undefined>) => {
+      const entries = Object.entries(event)
+        .filter(([key]) => key !== "type")
+        .map<[string, string]>(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)]);
+
+      return Object.fromEntries(entries);
+    };
 
     try {
       await agentRunner({
@@ -220,6 +226,11 @@ export async function buildServer(options: BuildServerOptions = {}) {
                 error: null,
               });
               writeEvent(event.type, { text: assistantText });
+              return;
+            }
+
+            if (event.type !== "run.failed") {
+              writeEvent(event.type, serializeEventData(event));
               return;
             }
 

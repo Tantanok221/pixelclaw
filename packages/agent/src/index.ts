@@ -46,6 +46,8 @@ function handleCliEvent(event: AgentRunEvent) {
     case "run.failed":
       console.error(`Error: ${event.error}`);
       break;
+    default:
+      break;
   }
 }
 

@@ -1,6 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type, type Static } from "@mariozechner/pi-ai";
-import { TodoStore, isTodoStatus } from "../todos/store.js";
+import { TodoStore, type TodoDocument, isTodoStatus } from "../todos/store.js";
 
 const updateTodoSchema = Type.Object({
   id: Type.String({ description: "Todo id to update" }),
@@ -13,7 +13,14 @@ const updateTodoSchema = Type.Object({
 
 type UpdateTodoInput = Static<typeof updateTodoSchema>;
 
-export function createUpdateTodoTool(store: TodoStore): AgentTool<typeof updateTodoSchema> {
+export interface UpdateTodoToolOptions {
+  onUpdated?: (document: TodoDocument) => void | Promise<void>;
+}
+
+export function createUpdateTodoTool(
+  store: TodoStore,
+  options: UpdateTodoToolOptions = {},
+): AgentTool<typeof updateTodoSchema> {
   return {
     name: "update_todo",
     label: "update_todo",
@@ -26,6 +33,8 @@ export function createUpdateTodoTool(store: TodoStore): AgentTool<typeof updateT
         status: input.status ? requireTodoStatus(input.status) : undefined,
         note: input.note,
       });
+      const document = await store.readTodo();
+      await options.onUpdated?.(document);
 
       return {
         content: [{ type: "text", text: JSON.stringify(todo, null, 2) }],
