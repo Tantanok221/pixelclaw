@@ -200,7 +200,7 @@ describe("Telegram bot message handling", () => {
     ]);
   });
 
-  it("keeps the sticky status message when the run fails", async () => {
+  it("only rotates the whimsical headline at most once every 5 seconds for tool updates", async () => {
     const telegramBot = (await import("../src/telegramBot.js").catch(() => ({}))) as {
       handleTelegramMessage?: (options: {
         chatId: string;
@@ -227,44 +227,44 @@ describe("Telegram bot message handling", () => {
     const repository = new ChatRepository(database.db);
     const telegram = createTelegramTransport();
     vi.useFakeTimers();
+    vi.spyOn(Math, "random")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.05)
+      .mockReturnValueOnce(0.1)
+      .mockReturnValueOnce(0.15)
+      .mockReturnValueOnce(0.2)
+      .mockReturnValueOnce(0.25)
+      .mockReturnValue(0.3);
 
-    await expect(
-      telegramBot.handleTelegramMessage?.({
-        chatId: "42",
-        text: "Break it",
-        repository,
-        agentRunner: async ({ onEvent }) => {
-          await onEvent({ type: "run.started" });
-          await onEvent({
-            type: "tool.started",
-            toolName: "bash",
-            args: { command: "npm test" },
-          });
-          throw new Error("Command exited with code 1");
-        },
-        telegram,
-      }),
-    ).rejects.toThrow("Command exited with code 1");
-
-    expect(telegram.sentMessages).toHaveLength(1);
-    expect(telegram.sentMessages[0]).toEqual({
+    await telegramBot.handleTelegramMessage?.({
       chatId: "42",
-      text: expect.stringContaining("State: starting"),
-      messageId: 1,
+      text: "Throttle headline changes",
+      repository,
+      agentRunner: async ({ onEvent }) => {
+        await onEvent({ type: "run.started" });
+        await onEvent({ type: "tool.started", toolName: "read", args: { path: "a.ts" } });
+        await onEvent({ type: "tool.completed", toolName: "read", args: { path: "a.ts" } });
+        await onEvent({ type: "tool.started", toolName: "bash", args: { command: "echo hi" } });
+        await vi.advanceTimersByTimeAsync(5001);
+        await onEvent({ type: "tool.completed", toolName: "bash", args: { command: "echo hi" } });
+        await onEvent({ type: "message.completed", text: "Done" });
+        return { text: "Done" };
+      },
+      telegram,
     });
-    expect(
-      telegram.editedMessages.some(
-        (message) =>
-          message.text.includes("State: failed") &&
-          message.text.includes("Tool: bash") &&
-          message.text.includes("Target: npm test") &&
-          message.text.includes("Error: Command exited with code 1"),
-      ),
-    ).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(3000);
+    const allStatusTexts = [telegram.sentMessages[0]?.text, ...telegram.editedMessages.map((message) => message.text)]
+      .filter((text): text is string => Boolean(text));
+    const headlines = allStatusTexts
+      .map((text) => text.split("\n")[0])
+      .filter((headline) => headline.length > 0);
 
-    expect(telegram.deletedMessages).toEqual([]);
+    expect(headlines[0]).toBe("Schlepping...");
+    expect(headlines[1]).toBe("Schlepping...");
+    expect(headlines[2]).toBe("Schlepping...");
+    expect(headlines[3]).toBe("Schlepping...");
+    expect(headlines[4]).toBe("Combobulating...");
+    expect(headlines[5]).toBe("Concocting...");
   });
 
   it("resets the Telegram chat to a fresh session on /new", async () => {
