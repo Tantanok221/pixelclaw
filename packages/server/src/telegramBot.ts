@@ -7,6 +7,7 @@ import {
   TELEGRAM_POLL_TIMEOUT_SECONDS,
   TELEGRAM_RETRY_DELAY_MS,
   TELEGRAM_STATUS_DELETE_DELAY_MS,
+  TELEGRAM_WHIMSICAL_HEADLINE_UPDATE_INTERVAL_MS,
   TELEGRAM_WHIMSICAL_HEADLINES,
 } from "./constants.js";
 import type { ChatRepository } from "./repository.js";
@@ -81,6 +82,7 @@ interface TelegramStatusSnapshot {
   headline: string;
   state: TelegramDisplayState;
   startedAtMs: number;
+  lastHeadlineUpdatedAtMs: number;
   toolName?: string;
   target?: string;
   lastToolName?: string;
@@ -141,10 +143,12 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
     assistantMessageId: assistantMessage.id,
   });
 
+  const statusStartedAtMs = Date.now();
   const statusSnapshot: TelegramStatusSnapshot = {
     headline: nextWhimsicalHeadline(),
     state: "starting",
-    startedAtMs: Date.now(),
+    startedAtMs: statusStartedAtMs,
+    lastHeadlineUpdatedAtMs: statusStartedAtMs,
     todos: [],
   };
   const statusMessage = new TelegramStatusMessage(
@@ -160,6 +164,18 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
   let startedAt: string | null = null;
   let eventChain = Promise.resolve();
 
+  const updateHeadline = (force = false) => {
+    const now = Date.now();
+    if (
+      force ||
+      now - statusSnapshot.lastHeadlineUpdatedAtMs >=
+        TELEGRAM_WHIMSICAL_HEADLINE_UPDATE_INTERVAL_MS
+    ) {
+      statusSnapshot.headline = nextWhimsicalHeadline();
+      statusSnapshot.lastHeadlineUpdatedAtMs = now;
+    }
+  };
+
   const syncStatus = async () => {
     await statusMessage.update(renderTelegramStatus(statusSnapshot));
   };
@@ -173,7 +189,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
     await options.telegram.sendMessage(options.chatId, finalText);
     statusSnapshot.state = "completed";
     statusSnapshot.error = undefined;
-    statusSnapshot.headline = nextWhimsicalHeadline();
+    updateHeadline(true);
     await syncStatus();
     statusMessage.deleteAfterDelay();
   };
@@ -194,7 +210,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
     statusSnapshot.error = TELEGRAM_MESSAGES.stoppedError;
     statusSnapshot.toolName ??= statusSnapshot.lastToolName;
     statusSnapshot.target ??= statusSnapshot.lastTarget;
-    statusSnapshot.headline = nextWhimsicalHeadline();
+    updateHeadline(true);
     await syncStatus();
   };
 
@@ -230,7 +246,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
 
           if (event.type === "run.state.changed") {
             statusSnapshot.state = mapRunState(event.state);
-            statusSnapshot.headline = nextWhimsicalHeadline();
+            updateHeadline();
             await syncStatus();
             return;
           }
@@ -242,7 +258,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
             statusSnapshot.lastToolName = statusSnapshot.toolName;
             statusSnapshot.lastTarget = statusSnapshot.target;
             statusSnapshot.error = undefined;
-            statusSnapshot.headline = nextWhimsicalHeadline();
+            updateHeadline();
             await syncStatus();
             return;
           }
@@ -252,7 +268,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
             statusSnapshot.toolName = undefined;
             statusSnapshot.target = undefined;
             statusSnapshot.error = undefined;
-            statusSnapshot.headline = nextWhimsicalHeadline();
+            updateHeadline();
             await syncStatus();
             return;
           }
@@ -278,7 +294,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
 
             if (statusSnapshot.state !== "finalizing") {
               statusSnapshot.state = "finalizing";
-              statusSnapshot.headline = nextWhimsicalHeadline();
+              updateHeadline(true);
               await syncStatus();
             }
             return;
@@ -316,7 +332,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
           statusSnapshot.error = event.error;
           statusSnapshot.toolName ??= statusSnapshot.lastToolName;
           statusSnapshot.target ??= statusSnapshot.lastTarget;
-          statusSnapshot.headline = nextWhimsicalHeadline();
+          updateHeadline(true);
           await syncStatus();
         });
 
@@ -371,7 +387,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
     statusSnapshot.error = message;
     statusSnapshot.toolName ??= statusSnapshot.lastToolName;
     statusSnapshot.target ??= statusSnapshot.lastTarget;
-    statusSnapshot.headline = nextWhimsicalHeadline();
+    updateHeadline(true);
     await syncStatus();
     throw error;
   } finally {
