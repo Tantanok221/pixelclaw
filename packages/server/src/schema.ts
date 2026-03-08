@@ -45,7 +45,32 @@ export const runs = sqliteTable("runs", {
   finishedAt: text("finished_at"),
 });
 
+export const telegramChats = sqliteTable("telegram_chats", {
+  chatId: text("chat_id").primaryKey(),
+  sessionId: text("session_id")
+    .notNull()
+    .references(() => sessions.id),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const sessionHandoffs = sqliteTable("session_handoffs", {
+  id: text("id").primaryKey(),
+  fromSessionId: text("from_session_id")
+    .notNull()
+    .references(() => sessions.id),
+  toSessionId: text("to_session_id")
+    .notNull()
+    .references(() => sessions.id),
+  summaryMessageId: text("summary_message_id")
+    .notNull()
+    .references(() => messages.id),
+  createdAt: text("created_at").notNull(),
+});
+
 export type SessionRow = typeof sessions.$inferSelect;
 export type ThreadRow = typeof threads.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;
 export type RunRow = typeof runs.$inferSelect;
+export type TelegramChatRow = typeof telegramChats.$inferSelect;
+export type SessionHandoffRow = typeof sessionHandoffs.$inferSelect;

@@ -15,6 +15,25 @@ cp .env.example .env
 
 The web app talks to the Fastify backend in `packages/server`, and the backend invokes the agent runtime in `packages/agent`.
 
+## Telegram Bot
+
+Telegram support is optional and is enabled when Pixelclaw can read a bot token from:
+
+```text
+$PIXELCLAW_HOME/system/telegram.json
+~/.pixelclaw/system/telegram.json
+```
+
+Example config:
+
+```json
+{
+  "botToken": "123456:example"
+}
+```
+
+When configured, the server starts a Telegram long-polling bot on boot. Each Telegram chat is treated as a personal inbox with one active session. Send `/new` in Telegram to start a fresh session.
+
 ## Scripts
 
 ```bash

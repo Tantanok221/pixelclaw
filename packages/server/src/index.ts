@@ -2,6 +2,7 @@ import { access, copyFile, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import { ensureAgentSystemRoot, ensureAgentWorkspaceRoot } from "../../agent/src/workspaceRoot.js";
 import { buildServer } from "./app.js";
+import { resolveTelegramConfigPath as resolveTelegramConfigPathFromFile } from "./telegramConfig.js";
 
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -24,6 +25,10 @@ export async function resolveDatabasePath() {
   await migrateLegacyDatabasePath(databasePath);
 
   return databasePath;
+}
+
+export async function resolveTelegramConfigPath() {
+  return resolveTelegramConfigPathFromFile();
 }
 
 async function migrateLegacyDatabasePath(databasePath: string) {

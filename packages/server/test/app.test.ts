@@ -196,4 +196,104 @@ describe("chat backend", () => {
       ],
     });
   });
+
+  it("compacts into a new session and rotates the browser cookie when the engine requests handoff", async () => {
+    const app = await buildServer({
+      agentRunner: async ({ messages, onEvent }) => {
+        expect(messages).toMatchObject([
+          { role: "assistant", content: "Checkpoint summary" },
+          { role: "user", content: "Recent user" },
+          { role: "assistant", content: "Recent assistant" },
+          { role: "user", content: "Trigger compaction" },
+        ]);
+        await onEvent({ type: "run.started" });
+        await onEvent({ type: "message.completed", text: "Compacted response" });
+        return { text: "Compacted response" };
+      },
+      compactionEngine: {
+        prepareConversation: async ({ repository, session, pendingUserMessage: _pendingUserMessage }) => {
+          const nextSession = await repository.createSession();
+          const nextThread = await repository.createThread(nextSession.id);
+          const summaryMessage = await repository.createMessage({
+            threadId: nextThread.id,
+            role: "assistant",
+            content: "Checkpoint summary",
+            status: "completed",
+          });
+          await repository.createMessage({
+            threadId: nextThread.id,
+            role: "user",
+            content: "Recent user",
+            status: "completed",
+          });
+          await repository.createMessage({
+            threadId: nextThread.id,
+            role: "assistant",
+            content: "Recent assistant",
+            status: "completed",
+          });
+
+          const methods = repository as unknown as {
+            createSessionHandoff?: (input: {
+              fromSessionId: string;
+              toSessionId: string;
+              summaryMessageId: string;
+            }) => Promise<void>;
+          };
+          await methods.createSessionHandoff?.({
+            fromSessionId: session.id,
+            toSessionId: nextSession.id,
+            summaryMessageId: summaryMessage.id,
+          });
+
+          return {
+            session: nextSession,
+            thread: nextThread,
+            compacted: true,
+          };
+        },
+      },
+    });
+    apps.push(app);
+
+    const firstResponse = await app.inject({
+      method: "POST",
+      url: "/api/chat/messages",
+      payload: { content: "Warm up" },
+    });
+    const originalCookie = extractCookie(firstResponse.headers["set-cookie"], "pixelclaw_session");
+
+    const compactedResponse = await app.inject({
+      method: "POST",
+      url: "/api/chat/messages",
+      payload: { content: "Trigger compaction" },
+      headers: {
+        cookie: `pixelclaw_session=${originalCookie}`,
+      },
+    });
+
+    expect(compactedResponse.statusCode).toBe(201);
+    const rotatedCookie = extractCookie(compactedResponse.headers["set-cookie"], "pixelclaw_session");
+    expect(rotatedCookie).toBeTruthy();
+    expect(rotatedCookie).not.toBe(originalCookie);
+
+    const compactedPayload = compactedResponse.json();
+    const transcript = await app.inject({
+      method: "GET",
+      url: `/api/chat/threads/${compactedPayload.threadId}/messages`,
+      headers: {
+        cookie: `pixelclaw_session=${rotatedCookie}`,
+      },
+    });
+
+    expect(transcript.json()).toMatchObject({
+      messages: [
+        { role: "assistant", content: "Checkpoint summary", status: "completed" },
+        { role: "user", content: "Recent user", status: "completed" },
+        { role: "assistant", content: "Recent assistant", status: "completed" },
+        { role: "user", content: "Trigger compaction", status: "completed" },
+        { role: "assistant", content: "", status: "pending" },
+      ],
+    });
+  });
 });

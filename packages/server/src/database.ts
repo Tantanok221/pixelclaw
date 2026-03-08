@@ -46,6 +46,21 @@ export function createDatabase(filename = ":memory:"): DatabaseContext {
       started_at TEXT,
       finished_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS telegram_chats (
+      chat_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS session_handoffs (
+      id TEXT PRIMARY KEY,
+      from_session_id TEXT NOT NULL REFERENCES sessions(id),
+      to_session_id TEXT NOT NULL REFERENCES sessions(id),
+      summary_message_id TEXT NOT NULL REFERENCES messages(id),
+      created_at TEXT NOT NULL
+    );
   `);
 
   return {

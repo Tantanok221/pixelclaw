@@ -5,11 +5,15 @@ import type * as schema from "./schema.js";
 import {
   messages,
   runs,
+  sessionHandoffs,
   sessions,
+  telegramChats,
   threads,
   type MessageRow,
   type RunRow,
+  type SessionHandoffRow,
   type SessionRow,
+  type TelegramChatRow,
   type ThreadRow,
 } from "./schema.js";
 
@@ -30,6 +34,61 @@ export class ChatRepository {
   async getSession(id: string): Promise<SessionRow | undefined> {
     return this.db.query.sessions.findFirst({
       where: eq(sessions.id, id),
+    });
+  }
+
+  async getTelegramChatSession(chatId: string): Promise<TelegramChatRow | undefined> {
+    return this.db.query.telegramChats.findFirst({
+      where: eq(telegramChats.chatId, chatId),
+    });
+  }
+
+  async setTelegramChatSession(chatId: string, sessionId: string): Promise<void> {
+    const now = nowIso();
+    const existing = await this.getTelegramChatSession(chatId);
+
+    if (existing) {
+      await this.db
+        .update(telegramChats)
+        .set({
+          sessionId,
+          updatedAt: now,
+        })
+        .where(eq(telegramChats.chatId, chatId));
+      return;
+    }
+
+    await this.db.insert(telegramChats).values({
+      chatId,
+      sessionId,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  async createSessionHandoff(input: {
+    fromSessionId: string;
+    toSessionId: string;
+    summaryMessageId: string;
+  }): Promise<SessionHandoffRow> {
+    const id = randomUUID();
+    const createdAt = nowIso();
+
+    await this.db.insert(sessionHandoffs).values({
+      id,
+      fromSessionId: input.fromSessionId,
+      toSessionId: input.toSessionId,
+      summaryMessageId: input.summaryMessageId,
+      createdAt,
+    });
+
+    return this.getRequiredSessionHandoff(id);
+  }
+
+  async listSessionHandoffsFrom(sessionId: string): Promise<SessionHandoffRow[]> {
+    return this.db.query.sessionHandoffs.findMany({
+      where: eq(sessionHandoffs.fromSessionId, sessionId),
+      orderBy: asc(sessionHandoffs.createdAt),
     });
   }
 
@@ -212,6 +271,16 @@ export class ChatRepository {
       throw new Error(`Run not found: ${id}`);
     }
     return run;
+  }
+
+  private async getRequiredSessionHandoff(id: string) {
+    const handoff = await this.db.query.sessionHandoffs.findFirst({
+      where: eq(sessionHandoffs.id, id),
+    });
+    if (!handoff) {
+      throw new Error(`Session handoff not found: ${id}`);
+    }
+    return handoff;
   }
 
   private async touchThread(threadId: string, updatedAt = nowIso()) {

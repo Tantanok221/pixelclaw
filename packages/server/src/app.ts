@@ -1,15 +1,23 @@
 import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
+import { compactionEngine, type CompactionEngine } from "./compactionEngine.js";
 import { createDatabase } from "./database.js";
 import { runDefaultAgentTurn, type RunAgentOptions, type ServerAgentMessage } from "./defaultAgentRunner.js";
 import { ChatRepository } from "./repository.js";
+import { startTelegramBot } from "./telegramBot.js";
 
 const SESSION_COOKIE = "pixelclaw_session";
 
 export interface BuildServerOptions {
   agentRunner?: (options: RunAgentOptions) => Promise<{ text: string }>;
   databasePath?: string;
+  compactionEngine?: CompactionEngine;
+  telegramBotStarter?: (options: {
+    repository: ChatRepository;
+    agentRunner: (options: RunAgentOptions) => Promise<{ text: string }>;
+    compactionEngine: CompactionEngine;
+  }) => Promise<{ close: () => Promise<void> } | null>;
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
@@ -17,10 +25,17 @@ export async function buildServer(options: BuildServerOptions = {}) {
   const database = createDatabase(options.databasePath);
   const repository = new ChatRepository(database.db);
   const agentRunner = options.agentRunner ?? runDefaultAgentTurn;
+  const resolvedCompactionEngine = options.compactionEngine ?? compactionEngine;
+  const telegramBot = await (options.telegramBotStarter ?? startTelegramBot)({
+    repository,
+    agentRunner,
+    compactionEngine: resolvedCompactionEngine,
+  });
 
   await app.register(cookie);
 
   app.addHook("onClose", async () => {
+    await telegramBot?.close();
     database.sqlite.close();
   });
 
@@ -89,27 +104,38 @@ export async function buildServer(options: BuildServerOptions = {}) {
       return { error: "Thread not found" };
     }
 
+    const prepared = await resolvedCompactionEngine.prepareConversation({
+      repository,
+      session,
+      thread,
+      pendingUserMessage: content,
+    });
+
+    if (prepared.session.id !== session.id) {
+      setSessionCookie(reply, prepared.session.id);
+    }
+
     const userMessage = await repository.createMessage({
-      threadId: thread.id,
+      threadId: prepared.thread.id,
       role: "user",
       content,
       status: "completed",
     });
     const assistantMessage = await repository.createMessage({
-      threadId: thread.id,
+      threadId: prepared.thread.id,
       role: "assistant",
       content: "",
       status: "pending",
     });
     const run = await repository.createRun({
-      threadId: thread.id,
+      threadId: prepared.thread.id,
       userMessageId: userMessage.id,
       assistantMessageId: assistantMessage.id,
     });
 
     reply.code(201);
     return {
-      threadId: thread.id,
+      threadId: prepared.thread.id,
       runId: run.id,
       assistantMessageId: assistantMessage.id,
       userMessageId: userMessage.id,
@@ -259,11 +285,18 @@ async function ensureSession(
   }
 
   const session = await repository.createSession(randomUUID());
-  reply.setCookie(SESSION_COOKIE, session.id, {
+  setSessionCookie(reply, session.id);
+  return session;
+}
+
+function setSessionCookie(
+  reply: { setCookie: (name: string, value: string, options: Record<string, unknown>) => unknown },
+  sessionId: string,
+) {
+  reply.setCookie(SESSION_COOKIE, sessionId, {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
   });
-  return session;
 }
