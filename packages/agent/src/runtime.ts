@@ -1,5 +1,6 @@
 import { Agent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import path from "node:path";
 import { getConfiguredModel, getProviderApiKey } from "./ModelProvider.js";
 import type { TodoDocument } from "./todos/store.js";
 import { createAgentTools } from "./tools/index.js";
@@ -31,16 +32,22 @@ export interface RunThreadOptions {
   signal?: AbortSignal;
 }
 
-const SYSTEM_PROMPT = [
-  "You are Pixelbot, a concise and helpful assistant.",
-  "At the start of each new session or task, call list_skill once before planning or using other tools.",
-  "If a relevant skill appears, call load_skill for that skill and follow its instructions.",
-  "Use read_todo, write_todo, and update_todo to persist the session todo list while working.",
-].join(" ");
+export function buildSystemPrompt(cwd: string): string {
+  return [
+    "You are Pixelbot, a concise and helpful assistant.",
+    "At the start of each new session or task, call list_skill once before planning or using other tools.",
+    "If a relevant skill appears, call load_skill for that skill and follow its instructions.",
+    "Use read_todo, write_todo, and update_todo to persist the session todo list while working.",
+    `Your current working directory is ${cwd}.`,
+    "Treat this directory as the base for locating existing files and deciding where to create new files unless the user says otherwise.",
+    "If you need to understand the workspace layout before editing, inspect this directory first and reason outward from there.",
+  ].join(" ");
+}
 
 export async function runAgentThread(options: RunThreadOptions): Promise<{ text: string }> {
   const textChunks: string[] = [];
   const workspaceRoot = await ensureAgentWorkspaceRoot();
+  const cwd = resolveAgentCwd(options.cwd, workspaceRoot);
   let currentState: AgentRunState | undefined;
   const toolArgsByCallId = new Map<string, unknown>();
   const emitState = (state: AgentRunState) => {
@@ -53,9 +60,9 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
   };
   const agent = new Agent({
     initialState: {
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: buildSystemPrompt(cwd),
       model: getConfiguredModel(),
-      tools: createAgentTools(workspaceRoot, {
+      tools: createAgentTools(cwd, {
         sessionId: options.sessionId,
         onTodoUpdate: (todoDocument) => {
           options.onEvent?.({ type: "todo.updated", todoDocument });
@@ -153,6 +160,10 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
   }
 
   return { text };
+}
+
+function resolveAgentCwd(cwd: string | undefined, workspaceRoot: string): string {
+  return cwd ? path.resolve(cwd) : workspaceRoot;
 }
 
 export function resolveAgentOutput(
