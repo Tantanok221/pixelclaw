@@ -31,7 +31,7 @@ describe("Telegram config resolution", () => {
 
     expect(resolveTelegramConfigPath).toBeTypeOf("function");
     await expect(resolveTelegramConfigPath?.()).resolves.toBe(
-      path.join("/tmp/pixel-home", ".pixelclaw", "workspace", "system", "telegram.json"),
+      path.join("/tmp/pixel-home", ".pixelclaw", "system", "telegram.json"),
     );
   });
 
@@ -56,6 +56,21 @@ describe("Telegram config resolution", () => {
     const tempHome = await createTempDir("pixelclaw-home-");
 
     process.env.PIXELCLAW_HOME = tempHome;
+
+    await expect(loadTelegramConfig()).resolves.toBeNull();
+  });
+
+  it("ignores a bot token in the old workspace system directory", async () => {
+    const tempHome = await createTempDir("pixelclaw-home-");
+    const legacySystemDir = path.join(tempHome, "workspace", "system");
+
+    process.env.PIXELCLAW_HOME = tempHome;
+    await mkdir(legacySystemDir, { recursive: true });
+    await writeFile(
+      path.join(legacySystemDir, "telegram.json"),
+      JSON.stringify({ botToken: "456:def" }, null, 2),
+      "utf-8",
+    );
 
     await expect(loadTelegramConfig()).resolves.toBeNull();
   });

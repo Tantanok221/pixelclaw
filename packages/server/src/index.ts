@@ -1,6 +1,9 @@
 import { access, copyFile, rename, unlink } from "node:fs/promises";
 import path from "node:path";
-import { ensureAgentSystemRoot, ensureAgentWorkspaceRoot } from "../../agent/src/workspaceRoot.js";
+import {
+  ensureAgentSystemRoot,
+  ensureAgentWorkspaceRoot,
+} from "../../agent/src/workspaceRoot.js";
 import { buildServer } from "./app.js";
 import { resolveTelegramConfigPath as resolveTelegramConfigPathFromFile } from "./telegramConfig.js";
 
