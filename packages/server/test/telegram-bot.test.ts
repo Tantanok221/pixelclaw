@@ -199,6 +199,51 @@ describe("Telegram bot message handling", () => {
     expect(threads).toHaveLength(1);
   });
 
+  it("returns deterministic command help on /help", async () => {
+    const telegramBot = (await import("../src/telegramBot.js").catch(() => ({}))) as {
+      handleTelegramMessage?: (options: {
+        chatId: string;
+        text: string;
+        repository: ChatRepository;
+        agentRunner: (options: {
+          sessionId: string;
+          threadId: string;
+          messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>;
+          onEvent: (event: { type: string }) => void | Promise<void>;
+        }) => Promise<{ text: string }>;
+        telegram: {
+          sendMessage: (chatId: string, text: string) => Promise<{ messageId: number }>;
+          editMessageText: (chatId: string, messageId: number, text: string) => Promise<void>;
+        };
+      }) => Promise<void>;
+    };
+
+    expect(telegramBot.handleTelegramMessage).toBeTypeOf("function");
+
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.db);
+    const telegram = createTelegramTransport();
+    const agentRunner = vi.fn(async () => ({ text: "unused" }));
+
+    await telegramBot.handleTelegramMessage?.({
+      chatId: "42",
+      text: "/help",
+      repository,
+      agentRunner,
+      telegram,
+    });
+
+    expect(agentRunner).not.toHaveBeenCalled();
+    expect(telegram.sentMessages).toEqual([
+      {
+        chatId: "42",
+        text: "Available commands:\n/new - Start a new chat.\n/stop - Stop the current activity.",
+        messageId: 1,
+      },
+    ]);
+  });
+
   it("rolls over long streamed replies into additional Telegram messages", async () => {
     const telegramBot = (await import("../src/telegramBot.js").catch(() => ({}))) as {
       handleTelegramMessage?: (options: {

@@ -8,8 +8,11 @@ const DEFAULT_EDIT_INTERVAL_MS = 400;
 const DEFAULT_POLL_TIMEOUT_SECONDS = 30;
 const DEFAULT_RETRY_DELAY_MS = 1000;
 const DEFAULT_PLACEHOLDER_TEXT = "...";
+const HELP_CHAT_COMMAND = "/help";
 const NEW_CHAT_COMMAND = "/new";
 const STOP_CHAT_COMMAND = "/stop";
+const HELP_MESSAGE =
+  "Available commands:\n/new - Start a new chat.\n/stop - Stop the current activity.";
 const STOPPING_MESSAGE = "Stopping current activity.";
 const NOTHING_TO_STOP_MESSAGE = "Nothing is currently running.";
 const STOPPED_REPLY_TEXT = "Stopped.";
@@ -75,6 +78,11 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
   if (text === NEW_CHAT_COMMAND) {
     await resetTelegramChatSession(options.repository, options.chatId);
     await options.telegram.sendMessage(options.chatId, "Started a new chat.");
+    return;
+  }
+
+  if (text === HELP_CHAT_COMMAND) {
+    await options.telegram.sendMessage(options.chatId, HELP_MESSAGE);
     return;
   }
 
