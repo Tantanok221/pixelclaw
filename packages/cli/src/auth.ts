@@ -4,6 +4,9 @@ import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
 import { resolveAuthFilePath } from "../../agent/src/ModelProvider.js";
 
 const PROVIDER_NAME = "openai-codex";
+const OPENAI_CODEX_NODE_RUNTIME_ERROR =
+  "OpenAI Codex OAuth is only available in Node.js environments";
+const OPENAI_CODEX_LOGIN_RETRY_DELAYS_MS = [25, 100];
 
 interface RunAgentAuthCliOptions {
   startDir?: string;
@@ -25,7 +28,7 @@ export async function runAgentAuthCli(
   });
 
   try {
-    const credentials = await loginOpenAICodex({
+    const credentials = await loginOpenAICodexWithRetry({
       onAuth: ({ url, instructions }) => {
         stdout(`Open this URL in your browser:\n${url}`);
         if (instructions) {
@@ -58,6 +61,28 @@ export async function runAgentAuthCli(
   }
 }
 
+async function loginOpenAICodexWithRetry(
+  options: Parameters<typeof loginOpenAICodex>[0],
+) {
+  let attempt = 0;
+
+  while (true) {
+    try {
+      return await loginOpenAICodex(options);
+    } catch (error) {
+      if (
+        !isOpenAICodexNodeRuntimeRace(error) ||
+        attempt >= OPENAI_CODEX_LOGIN_RETRY_DELAYS_MS.length
+      ) {
+        throw error;
+      }
+
+      await sleep(OPENAI_CODEX_LOGIN_RETRY_DELAYS_MS[attempt]);
+      attempt += 1;
+    }
+  }
+}
+
 async function loadAuth(authFilePath: string) {
   if (!(await pathExists(authFilePath))) {
     return {} as Record<string, Record<string, unknown>>;
@@ -76,6 +101,14 @@ async function pathExists(candidatePath: string) {
   } catch {
     return false;
   }
+}
+
+function isOpenAICodexNodeRuntimeRace(error: unknown) {
+  return error instanceof Error && error.message === OPENAI_CODEX_NODE_RUNTIME_ERROR;
+}
+
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

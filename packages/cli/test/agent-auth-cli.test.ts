@@ -117,4 +117,40 @@ describe("agent auth CLI", () => {
       },
     });
   });
+
+  it("retries once when the OpenAI Codex OAuth package misdetects the Node.js runtime", async () => {
+    const homeDir = await createTempDir("pixelclaw-home-");
+    process.env.PIXELCLAW_HOME = homeDir;
+
+    loginOpenAICodex
+      .mockRejectedValueOnce(
+        new Error("OpenAI Codex OAuth is only available in Node.js environments"),
+      )
+      .mockResolvedValueOnce({
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: "2030-01-01T00:00:00.000Z",
+        accountId: "acct_123",
+      });
+
+    const stderr: string[] = [];
+    const exitCode = await runAgentAuthCli([], {
+      stdout: () => undefined,
+      stderr: (message) => stderr.push(message),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toEqual([]);
+    expect(loginOpenAICodex).toHaveBeenCalledTimes(2);
+
+    const authPath = path.join(homeDir, "system", "auth.json");
+    const auth = JSON.parse(await readFile(authPath, "utf-8")) as Record<string, unknown>;
+
+    expect(auth).toMatchObject({
+      "openai-codex": {
+        type: "oauth",
+        access: "access-token",
+      },
+    });
+  });
 });
