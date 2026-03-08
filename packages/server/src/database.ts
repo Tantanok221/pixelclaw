@@ -50,6 +50,7 @@ export function createDatabase(filename = ":memory:"): DatabaseContext {
     CREATE TABLE IF NOT EXISTS telegram_chats (
       chat_id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL REFERENCES sessions(id),
+      last_update_id INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -62,6 +63,14 @@ export function createDatabase(filename = ":memory:"): DatabaseContext {
       created_at TEXT NOT NULL
     );
   `);
+
+  const telegramChatColumns = sqlite
+    .prepare("PRAGMA table_info(telegram_chats)")
+    .all() as Array<{ name?: string }>;
+
+  if (!telegramChatColumns.some((column) => column.name === "last_update_id")) {
+    sqlite.exec("ALTER TABLE telegram_chats ADD COLUMN last_update_id INTEGER");
+  }
 
   return {
     sqlite,

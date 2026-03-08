@@ -273,6 +273,97 @@ describe("Telegram bot message handling", () => {
     });
   });
 
+  it("serializes final Telegram edits so completion does not race a scheduled flush", async () => {
+    const telegramBot = (await import("../src/telegramBot.js").catch(() => ({}))) as {
+      handleTelegramMessage?: (options: {
+        chatId: string;
+        text: string;
+        repository: ChatRepository;
+        agentRunner: (options: {
+          sessionId: string;
+          threadId: string;
+          messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>;
+          onEvent: (event: { type: string; delta?: string; text?: string }) => void | Promise<void>;
+        }) => Promise<{ text: string }>;
+        telegram: {
+          sendMessage: (chatId: string, text: string) => Promise<{ messageId: number }>;
+          editMessageText: (chatId: string, messageId: number, text: string) => Promise<void>;
+        };
+        streamOptions?: {
+          editIntervalMs?: number;
+          maxMessageLength?: number;
+          placeholderText?: string;
+        };
+      }) => Promise<void>;
+    };
+
+    expect(telegramBot.handleTelegramMessage).toBeTypeOf("function");
+
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.db);
+    const sentMessages: SentMessage[] = [];
+    const editedMessages: EditedMessage[] = [];
+    let nextMessageId = 1;
+    const pendingEdits = new Set<string>();
+
+    await expect(
+      telegramBot.handleTelegramMessage?.({
+        chatId: "42",
+        text: "Race the flush",
+        repository,
+        agentRunner: async ({ onEvent }) => {
+          await onEvent({ type: "run.started" });
+          await onEvent({ type: "message.delta", delta: "Hello world" });
+          await onEvent({ type: "message.completed", text: "Hello world" });
+          return { text: "Hello world" };
+        },
+        telegram: {
+          async sendMessage(chatId: string, text: string) {
+            const message = {
+              chatId,
+              text,
+              messageId: nextMessageId++,
+            };
+            sentMessages.push(message);
+            return { messageId: message.messageId };
+          },
+          async editMessageText(chatId: string, messageId: number, text: string) {
+            const key = `${messageId}:${text}`;
+            if (pendingEdits.has(key)) {
+              throw new Error("Telegram API request failed with status 400");
+            }
+
+            pendingEdits.add(key);
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            pendingEdits.delete(key);
+            editedMessages.push({ chatId, messageId, text });
+          },
+        },
+        streamOptions: {
+          editIntervalMs: 1,
+          maxMessageLength: 4096,
+          placeholderText: "...",
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(sentMessages).toEqual([
+      {
+        chatId: "42",
+        text: "...",
+        messageId: 1,
+      },
+    ]);
+    expect(editedMessages).toEqual([
+      {
+        chatId: "42",
+        messageId: 1,
+        text: "Hello world",
+      },
+    ]);
+  });
+
   it("starts polling when configured and shuts down cleanly", async () => {
     const telegramBot = (await import("../src/telegramBot.js").catch(() => ({}))) as {
       startTelegramBot?: (options: {
@@ -341,6 +432,270 @@ describe("Telegram bot message handling", () => {
     });
 
     await expect(controller?.close()).resolves.toBeUndefined();
+  });
+
+  it("serializes overlapping Telegram edits while completing a streamed reply", async () => {
+    const telegramBot = (await import("../src/telegramBot.js").catch(() => ({}))) as {
+      handleTelegramMessage?: (options: {
+        chatId: string;
+        text: string;
+        repository: ChatRepository;
+        agentRunner: (options: {
+          sessionId: string;
+          threadId: string;
+          messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>;
+          onEvent: (event: { type: string; delta?: string; text?: string }) => void | Promise<void>;
+        }) => Promise<{ text: string }>;
+        telegram: {
+          sendMessage: (chatId: string, text: string) => Promise<{ messageId: number }>;
+          editMessageText: (chatId: string, messageId: number, text: string) => Promise<void>;
+        };
+        streamOptions?: {
+          editIntervalMs?: number;
+          maxMessageLength?: number;
+          placeholderText?: string;
+        };
+      }) => Promise<void>;
+    };
+
+    expect(telegramBot.handleTelegramMessage).toBeTypeOf("function");
+
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.db);
+    const telegram = createTelegramTransport();
+    const editsInFlight = new Set<string>();
+    const originalEditMessageText = telegram.editMessageText;
+    let releaseFirstEdit: (() => void) | undefined;
+    const firstEditSettled = new Promise<void>((resolve) => {
+      releaseFirstEdit = resolve;
+    });
+
+    telegram.editMessageText = async (chatId, messageId, text) => {
+      const editKey = `${messageId}:${text}`;
+      if (editsInFlight.has(editKey)) {
+        throw new Error("Telegram API request failed with status 400");
+      }
+
+      editsInFlight.add(editKey);
+      try {
+        await originalEditMessageText(chatId, messageId, text);
+        if (telegram.editedMessages.length === 1) {
+          await firstEditSettled;
+        }
+      } finally {
+        editsInFlight.delete(editKey);
+      }
+    };
+
+    await expect(
+      telegramBot.handleTelegramMessage?.({
+        chatId: "42",
+        text: "Trigger overlap",
+        repository,
+        agentRunner: async ({ onEvent }) => {
+          await onEvent({ type: "run.started" });
+          await onEvent({ type: "message.delta", delta: "Hello" });
+          await new Promise((resolve) => setTimeout(resolve, 20));
+
+          const completion = onEvent({ type: "message.completed", text: "Hello" });
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          releaseFirstEdit?.();
+          await completion;
+
+          return { text: "Hello" };
+        },
+        telegram,
+        streamOptions: {
+          editIntervalMs: 5,
+          maxMessageLength: 4096,
+          placeholderText: "...",
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(telegram.editedMessages).toEqual([
+      {
+        chatId: "42",
+        messageId: 1,
+        text: "Hello",
+      },
+    ]);
+  });
+
+  it("ignores duplicate Telegram updates in the same polling batch", async () => {
+    const telegramBot = (await import("../src/telegramBot.js").catch(() => ({}))) as {
+      startTelegramBot?: (options: {
+        repository: ChatRepository;
+        agentRunner: (options: {
+          sessionId: string;
+          threadId: string;
+          messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>;
+          onEvent: (event: { type: string; delta?: string; text?: string }) => void | Promise<void>;
+        }) => Promise<{ text: string }>;
+        telegram: {
+          getUpdates: (
+            offset: number,
+            timeoutSeconds: number,
+            signal?: AbortSignal,
+          ) => Promise<Array<{ updateId: number; chatId: string; text: string }>>;
+          sendMessage: (chatId: string, text: string) => Promise<{ messageId: number }>;
+          editMessageText: (chatId: string, messageId: number, text: string) => Promise<void>;
+        };
+        pollTimeoutSeconds?: number;
+        retryDelayMs?: number;
+      }) => Promise<{ close: () => Promise<void> } | null>;
+    };
+
+    expect(telegramBot.startTelegramBot).toBeTypeOf("function");
+
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.db);
+    const telegram = createTelegramTransport();
+    let updateCalls = 0;
+
+    const controller = await telegramBot.startTelegramBot?.({
+      repository,
+      agentRunner: async ({ onEvent }) => {
+        await onEvent({ type: "run.started" });
+        await onEvent({ type: "message.completed", text: "pong" });
+        return { text: "pong" };
+      },
+      telegram: {
+        ...telegram,
+        async getUpdates(_offset, _timeoutSeconds, signal) {
+          updateCalls += 1;
+          if (updateCalls === 1) {
+            return [
+              { updateId: 1, chatId: "99", text: "ping" },
+              { updateId: 1, chatId: "99", text: "ping" },
+            ];
+          }
+
+          return await new Promise((resolve) => {
+            signal?.addEventListener("abort", () => resolve([]), { once: true });
+          });
+        },
+      },
+      pollTimeoutSeconds: 0,
+      retryDelayMs: 0,
+    });
+
+    await waitFor(async () => {
+      const mapping = await repository.getTelegramChatSession("99");
+      expect(mapping).toBeTruthy();
+      expect(telegram.sentMessages).toHaveLength(1);
+      expect(telegram.editedMessages).toEqual([
+        {
+          chatId: "99",
+          messageId: 1,
+          text: "pong",
+        },
+      ]);
+    });
+
+    await expect(controller?.close()).resolves.toBeUndefined();
+  });
+
+  it("does not reply twice when Telegram replays an already handled update after restart", async () => {
+    const telegramBot = (await import("../src/telegramBot.js").catch(() => ({}))) as {
+      startTelegramBot?: (options: {
+        repository: ChatRepository;
+        agentRunner: (options: {
+          sessionId: string;
+          threadId: string;
+          messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>;
+          onEvent: (event: { type: string; delta?: string; text?: string }) => void | Promise<void>;
+        }) => Promise<{ text: string }>;
+        telegram: {
+          getUpdates: (
+            offset: number,
+            timeoutSeconds: number,
+            signal?: AbortSignal,
+          ) => Promise<Array<{ updateId: number; chatId: string; text: string }>>;
+          sendMessage: (chatId: string, text: string) => Promise<{ messageId: number }>;
+          editMessageText: (chatId: string, messageId: number, text: string) => Promise<void>;
+        };
+        pollTimeoutSeconds?: number;
+        retryDelayMs?: number;
+      }) => Promise<{ close: () => Promise<void> } | null>;
+    };
+
+    expect(telegramBot.startTelegramBot).toBeTypeOf("function");
+
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.db);
+    const telegram = createTelegramTransport();
+
+    const createReplayPollingTransport = (): {
+      getUpdates: (
+        offset: number,
+        timeoutSeconds: number,
+        signal?: AbortSignal,
+      ) => Promise<Array<{ updateId: number; chatId: string; text: string }>>;
+      sendMessage: (chatId: string, text: string) => Promise<{ messageId: number }>;
+      editMessageText: (chatId: string, messageId: number, text: string) => Promise<void>;
+    } => {
+      let updateCalls = 0;
+
+      return {
+        ...telegram,
+        async getUpdates(_offset: number, _timeoutSeconds: number, signal?: AbortSignal) {
+          updateCalls += 1;
+          if (updateCalls === 1) {
+            return [{ updateId: 7, chatId: "99", text: "ping" }];
+          }
+
+          return await new Promise((resolve) => {
+            signal?.addEventListener("abort", () => resolve([]), { once: true });
+          });
+        },
+      };
+    };
+
+    const runAgent = async ({
+      onEvent,
+    }: {
+      onEvent: (event: { type: string; delta?: string; text?: string }) => void | Promise<void>;
+    }) => {
+      await onEvent({ type: "run.started" });
+      await onEvent({ type: "message.completed", text: "pong" });
+      return { text: "pong" };
+    };
+
+    const firstController = await telegramBot.startTelegramBot?.({
+      repository,
+      agentRunner: runAgent,
+      telegram: createReplayPollingTransport(),
+      pollTimeoutSeconds: 0,
+      retryDelayMs: 0,
+    });
+
+    await waitFor(() => {
+      expect(telegram.editedMessages).toContainEqual({
+        chatId: "99",
+        messageId: 1,
+        text: "pong",
+      });
+    });
+
+    await expect(firstController?.close()).resolves.toBeUndefined();
+
+    const secondController = await telegramBot.startTelegramBot?.({
+      repository,
+      agentRunner: runAgent,
+      telegram: createReplayPollingTransport(),
+      pollTimeoutSeconds: 0,
+      retryDelayMs: 0,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await expect(secondController?.close()).resolves.toBeUndefined();
+
+    expect(telegram.sentMessages).toHaveLength(1);
+    expect(telegram.editedMessages).toHaveLength(1);
   });
 
   it("remaps Telegram chats to the compacted session when the engine hands off", async () => {

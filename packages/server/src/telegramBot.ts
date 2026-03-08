@@ -250,7 +250,20 @@ export async function startTelegramBot(
         activePollController = undefined;
 
         for (const update of updates) {
+          if (update.updateId < updateOffset) {
+            continue;
+          }
+
           updateOffset = Math.max(updateOffset, update.updateId + 1);
+          const chatSession = await options.repository.getTelegramChatSession(update.chatId);
+          if (
+            chatSession?.lastUpdateId !== null &&
+            chatSession?.lastUpdateId !== undefined &&
+            update.updateId <= chatSession.lastUpdateId
+          ) {
+            continue;
+          }
+
           await handleTelegramMessage({
             chatId: update.chatId,
             text: update.text,
@@ -259,6 +272,7 @@ export async function startTelegramBot(
             telegram,
             compactionEngine: options.compactionEngine,
           });
+          await options.repository.markTelegramUpdateHandled(update.chatId, update.updateId);
         }
       } catch (error) {
         activePollController = undefined;
@@ -290,6 +304,7 @@ class TelegramReplyStreamer {
   private readonly sentTexts: string[] = [];
   private readonly pendingEdits = new Set<Promise<void>>();
   private flushError: Error | undefined;
+  private flushChain: Promise<void> = Promise.resolve();
   private flushTimer: NodeJS.Timeout | undefined;
   private hasStarted = false;
 
@@ -355,7 +370,7 @@ class TelegramReplyStreamer {
       this.flushTimer = undefined;
     }
 
-    await this.flush();
+    await this.enqueueFlush();
     await Promise.all(this.pendingEdits);
     this.throwIfFlushFailed();
   }
@@ -407,7 +422,7 @@ class TelegramReplyStreamer {
 
   private async queueFlush(force: boolean) {
     if (force || this.editIntervalMs <= 0) {
-      await this.flush();
+      await this.enqueueFlush();
       return;
     }
 
@@ -417,10 +432,20 @@ class TelegramReplyStreamer {
 
     this.flushTimer = setTimeout(() => {
       this.flushTimer = undefined;
-      void this.flush().catch((error: unknown) => {
+      void this.enqueueFlush().catch((error: unknown) => {
         this.flushError = error instanceof Error ? error : new Error(String(error));
       });
     }, this.editIntervalMs);
+  }
+
+  private enqueueFlush() {
+    const nextFlush = this.flushChain.catch(() => undefined).then(async () => {
+      this.throwIfFlushFailed();
+      await this.flush();
+    });
+
+    this.flushChain = nextFlush;
+    return nextFlush;
   }
 
   private async flush() {

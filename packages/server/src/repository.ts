@@ -61,9 +61,26 @@ export class ChatRepository {
     await this.db.insert(telegramChats).values({
       chatId,
       sessionId,
+      lastUpdateId: null,
       createdAt: now,
       updatedAt: now,
     });
+  }
+
+  async markTelegramUpdateHandled(chatId: string, updateId: number): Promise<void> {
+    const existing = await this.getTelegramChatSession(chatId);
+    if (!existing) {
+      return;
+    }
+
+    const now = nowIso();
+    await this.db
+      .update(telegramChats)
+      .set({
+        lastUpdateId: Math.max(existing.lastUpdateId ?? Number.MIN_SAFE_INTEGER, updateId),
+        updatedAt: now,
+      })
+      .where(eq(telegramChats.chatId, chatId));
   }
 
   async createSessionHandoff(input: {

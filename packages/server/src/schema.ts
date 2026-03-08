@@ -1,4 +1,4 @@
-import { sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),
@@ -50,6 +50,7 @@ export const telegramChats = sqliteTable("telegram_chats", {
   sessionId: text("session_id")
     .notNull()
     .references(() => sessions.id),
+  lastUpdateId: integer("last_update_id"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
