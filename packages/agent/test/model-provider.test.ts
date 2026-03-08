@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 describe("resolveAuthFilePath", () => {
-  it("resolves auth.json from the Pixelclaw home directory", async () => {
+  it("resolves auth.json from the Pixelclaw system directory under the workspace root", async () => {
     const workspaceRoot = await createTempDir("pixelclaw-workspace-");
     const packageDir = path.join(workspaceRoot, "packages", "server");
     const homeDir = await createTempDir("pixelclaw-home-");
@@ -38,16 +38,16 @@ describe("resolveAuthFilePath", () => {
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
 
     await expect(resolveAuthFilePath(packageDir)).resolves.toBe(
-      path.join(homeDir, ".pixelclaw", "system", "auth.json"),
+      path.join(homeDir, ".pixelclaw", "workspace", "system", "auth.json"),
     );
   });
 
-  it("moves a legacy auth file from the workspace root into the system directory", async () => {
+  it("moves a legacy auth file from the workspace root into the system directory under the workspace root", async () => {
     const workspaceRoot = await createTempDir("pixelclaw-workspace-");
     const packageDir = path.join(workspaceRoot, "packages", "server");
     const homeDir = await createTempDir("pixelclaw-home-");
     const legacyAuthPath = path.join(workspaceRoot, "auth.json");
-    const systemAuthPath = path.join(homeDir, ".pixelclaw", "system", "auth.json");
+    const systemAuthPath = path.join(homeDir, ".pixelclaw", "workspace", "system", "auth.json");
 
     await mkdir(packageDir, { recursive: true });
     await writeFile(

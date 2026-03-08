@@ -31,7 +31,7 @@ describe("Telegram config resolution", () => {
 
     expect(resolveTelegramConfigPath).toBeTypeOf("function");
     await expect(resolveTelegramConfigPath?.()).resolves.toBe(
-      path.join("/tmp/pixel-home", ".pixelclaw", "system", "telegram.json"),
+      path.join("/tmp/pixel-home", ".pixelclaw", "workspace", "system", "telegram.json"),
     );
   });
 
