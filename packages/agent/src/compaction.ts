@@ -1,5 +1,5 @@
 import { Agent, type AgentMessage } from "@mariozechner/pi-agent-core";
-import { getConfiguredModel, getProviderApiKey } from "./ModelProvider.js";
+import { defaultModelProvider, type BaseModelProvider } from "./ModelProvider.js";
 import { resolveAgentOutput } from "./runtime.js";
 
 const COMPACTION_SYSTEM_PROMPT = [
@@ -17,17 +17,23 @@ export interface CompactionSummaryMessage {
   content: string;
 }
 
+export interface RunCompactionSummaryOptions {
+  modelProvider?: BaseModelProvider;
+}
+
 export async function runCompactionSummary(
   messages: CompactionSummaryMessage[],
+  options: RunCompactionSummaryOptions = {},
 ): Promise<string> {
+  const modelProvider = options.modelProvider ?? defaultModelProvider;
   const agent = new Agent({
     initialState: {
       systemPrompt: COMPACTION_SYSTEM_PROMPT,
-      model: getConfiguredModel(),
+      model: modelProvider.getModel(),
       tools: [],
       messages: [buildCompactionPrompt(messages)],
     },
-    getApiKey: async () => getProviderApiKey(),
+    getApiKey: async () => modelProvider.getApiKey(),
   });
 
   await agent.continue();

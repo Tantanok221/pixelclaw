@@ -1,8 +1,15 @@
 import "dotenv/config";
+import { defaultModelProvider } from "./ModelProvider.js";
 import type { AgentRunEvent } from "./runtime.js";
 import { resolveAgentOutput, runAgentThread } from "./runtime.js";
 
 export { resolveAgentOutput, runAgentThread } from "./runtime.js";
+export {
+  BaseModelProvider,
+  CodexModelProvider,
+  codexModelProvider,
+  defaultModelProvider,
+} from "./ModelProvider.js";
 
 export async function runAgentPrompt(prompt: string): Promise<string> {
   const result = await runAgentThread({
@@ -33,7 +40,7 @@ async function main() {
 function handleCliEvent(event: AgentRunEvent) {
   switch (event.type) {
     case "run.started":
-      console.log("Starting with gpt-5.4");
+      console.log(`Starting with ${defaultModelProvider.modelName}`);
       console.log("\n[Text started]");
       break;
     case "message.delta":

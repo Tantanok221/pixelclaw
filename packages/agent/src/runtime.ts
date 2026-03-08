@@ -1,7 +1,7 @@
 import { Agent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import path from "node:path";
-import { getConfiguredModel, getProviderApiKey } from "./ModelProvider.js";
+import { defaultModelProvider, type BaseModelProvider } from "./ModelProvider.js";
 import type { TodoDocument } from "./todos/store.js";
 import { createAgentTools } from "./tools/index.js";
 import { ensureAgentWorkspaceRoot } from "./workspaceRoot.js";
@@ -28,6 +28,7 @@ export interface RunThreadOptions {
   messages: ThreadMessageInput[];
   sessionId?: string;
   cwd?: string;
+  modelProvider?: BaseModelProvider;
   onEvent?: (event: AgentRunEvent) => void;
   signal?: AbortSignal;
 }
@@ -48,6 +49,7 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
   const textChunks: string[] = [];
   const workspaceRoot = await ensureAgentWorkspaceRoot();
   const cwd = resolveAgentCwd(options.cwd, workspaceRoot);
+  const modelProvider = options.modelProvider ?? defaultModelProvider;
   let currentState: AgentRunState | undefined;
   const toolArgsByCallId = new Map<string, unknown>();
   const emitState = (state: AgentRunState) => {
@@ -61,17 +63,17 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
   const agent = new Agent({
     initialState: {
       systemPrompt: buildSystemPrompt(cwd),
-      model: getConfiguredModel(),
+      model: modelProvider.getModel(),
       tools: createAgentTools(cwd, {
         sessionId: options.sessionId,
         onTodoUpdate: (todoDocument) => {
           options.onEvent?.({ type: "todo.updated", todoDocument });
         },
       }),
-      messages: options.messages.map(toAgentMessage),
+      messages: options.messages.map((message) => toAgentMessage(message, modelProvider)),
     },
     sessionId: options.sessionId,
-    getApiKey: async () => getProviderApiKey(),
+    getApiKey: async () => modelProvider.getApiKey(cwd),
   });
 
   options.onEvent?.({ type: "run.started" });
@@ -183,7 +185,7 @@ export function resolveAgentOutput(
   return errorText ?? getLatestAssistantError(messages);
 }
 
-function toAgentMessage(message: ThreadMessageInput): AgentMessage {
+function toAgentMessage(message: ThreadMessageInput, modelProvider: BaseModelProvider): AgentMessage {
   const timestamp = toTimestamp(message.createdAt);
   if (message.role === "user") {
     return {
@@ -193,29 +195,7 @@ function toAgentMessage(message: ThreadMessageInput): AgentMessage {
     };
   }
 
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: message.content }],
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    model: "gpt-5.4",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
-    stopReason: "stop",
-    timestamp,
-  };
+  return modelProvider.createAssistantMessage(message.content, timestamp);
 }
 
 function getLatestAssistantText(messages: AgentMessage[]): string {

@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import { access, readFile, writeFile } from "node:fs/promises";
 import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
-import { resolveAuthFilePath } from "../../agent/src/ModelProvider.js";
+import { codexModelProvider } from "../../agent/src/ModelProvider.js";
 
 const PROVIDER_NAME = "openai-codex";
 const OPENAI_CODEX_NODE_RUNTIME_ERROR =
@@ -42,7 +42,9 @@ export async function runAgentAuthCli(
       onProgress: stdout,
     });
 
-    const authFilePath = await resolveAuthFilePath(options.startDir ?? process.cwd());
+    const authFilePath = await codexModelProvider.resolveAuthFilePath(
+      options.startDir ?? process.cwd(),
+    );
     const auth = await loadAuth(authFilePath);
     auth[PROVIDER_NAME] = {
       type: "oauth",
