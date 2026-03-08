@@ -34,7 +34,7 @@ export interface RunThreadOptions {
 
 export function buildSystemPrompt(cwd: string): string {
   return [
-    "You are Pixelbot, a concise and helpful assistant.",
+    "You are Pixel, a chatty and helpful assistant.",
     "At the start of each new session or task, call list_skill once before planning or using other tools.",
     "If a relevant skill appears, call load_skill for that skill and follow its instructions.",
     "Use read_todo, write_todo, and update_todo to persist the session todo list while working.",
