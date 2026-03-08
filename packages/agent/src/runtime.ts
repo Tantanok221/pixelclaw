@@ -21,6 +21,7 @@ export interface RunThreadOptions {
   sessionId?: string;
   cwd?: string;
   onEvent?: (event: AgentRunEvent) => void;
+  signal?: AbortSignal;
 }
 
 const SYSTEM_PROMPT = [
@@ -45,6 +46,16 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
   });
 
   options.onEvent?.({ type: "run.started" });
+
+  const abortAgent = () => {
+    agent.abort();
+  };
+
+  if (options.signal?.aborted) {
+    abortAgent();
+  }
+
+  options.signal?.addEventListener("abort", abortAgent, { once: true });
 
   const unsubscribe = agent.subscribe((event) => {
     if (event.type !== "message_update") {
@@ -79,6 +90,7 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
     options.onEvent?.({ type: "run.failed", error: message });
     throw error;
   } finally {
+    options.signal?.removeEventListener("abort", abortAgent);
     unsubscribe();
   }
 

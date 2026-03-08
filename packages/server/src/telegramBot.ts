@@ -9,6 +9,11 @@ const DEFAULT_POLL_TIMEOUT_SECONDS = 30;
 const DEFAULT_RETRY_DELAY_MS = 1000;
 const DEFAULT_PLACEHOLDER_TEXT = "...";
 const NEW_CHAT_COMMAND = "/new";
+const STOP_CHAT_COMMAND = "/stop";
+const STOPPING_MESSAGE = "Stopping current activity.";
+const NOTHING_TO_STOP_MESSAGE = "Nothing is currently running.";
+const STOPPED_REPLY_TEXT = "Stopped.";
+const STOPPED_ERROR_MESSAGE = "Stopped by user.";
 
 interface TelegramUpdate {
   updateId: number;
@@ -49,6 +54,7 @@ export interface HandleTelegramMessageOptions {
   telegram: TelegramTransport;
   compactionEngine?: CompactionEngine;
   streamOptions?: TelegramStreamOptions;
+  signal?: AbortSignal;
 }
 
 export interface StartTelegramBotOptions {
@@ -69,6 +75,11 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
   if (text === NEW_CHAT_COMMAND) {
     await resetTelegramChatSession(options.repository, options.chatId);
     await options.telegram.sendMessage(options.chatId, "Started a new chat.");
+    return;
+  }
+
+  if (text === STOP_CHAT_COMMAND) {
+    await options.telegram.sendMessage(options.chatId, NOTHING_TO_STOP_MESSAGE);
     return;
   }
 
@@ -109,6 +120,20 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
   let hasCompletedEvent = false;
   let startedAt: string | null = null;
   let eventChain = Promise.resolve();
+  const finalizeStoppedRun = async () => {
+    const finalText = assistantText || STOPPED_REPLY_TEXT;
+    await options.repository.updateMessage(assistantMessage.id, {
+      content: finalText,
+      status: "error",
+    });
+    await options.repository.updateRun(run.id, {
+      status: "failed",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      error: STOPPED_ERROR_MESSAGE,
+    });
+    await streamer.complete(finalText);
+  };
 
   try {
     const threadMessages = await options.repository.listMessages(prepared.thread.id);
@@ -126,6 +151,10 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
         })),
       onEvent: (event) => {
         eventChain = eventChain.then(async () => {
+          if (options.signal?.aborted) {
+            return;
+          }
+
           if (event.type === "run.started") {
             startedAt ??= new Date().toISOString();
             await options.repository.updateRun(run.id, {
@@ -189,6 +218,12 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
 
     await eventChain;
 
+    if (options.signal?.aborted) {
+      startedAt ??= new Date().toISOString();
+      await finalizeStoppedRun();
+      return;
+    }
+
     if (!hasCompletedEvent) {
       startedAt ??= new Date().toISOString();
       const finalText = assistantText || result.text;
@@ -206,6 +241,12 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
     }
   } catch (error: unknown) {
     startedAt ??= new Date().toISOString();
+
+    if (options.signal?.aborted) {
+      await finalizeStoppedRun();
+      return;
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     await options.repository.updateMessage(assistantMessage.id, {
       content: assistantText,
@@ -237,6 +278,12 @@ export async function startTelegramBot(
   let isClosed = false;
   let updateOffset = 0;
   let activePollController: AbortController | undefined;
+  const updateCoordinator = new TelegramUpdateCoordinator({
+    repository: options.repository,
+    agentRunner: options.agentRunner,
+    compactionEngine: options.compactionEngine,
+    telegram,
+  });
 
   const loop = (async () => {
     while (!isClosed) {
@@ -264,15 +311,7 @@ export async function startTelegramBot(
             continue;
           }
 
-          await handleTelegramMessage({
-            chatId: update.chatId,
-            text: update.text,
-            repository: options.repository,
-            agentRunner: options.agentRunner,
-            telegram,
-            compactionEngine: options.compactionEngine,
-          });
-          await options.repository.markTelegramUpdateHandled(update.chatId, update.updateId);
+          updateCoordinator.dispatch(update);
         }
       } catch (error) {
         activePollController = undefined;
@@ -290,9 +329,177 @@ export async function startTelegramBot(
     close: async () => {
       isClosed = true;
       activePollController?.abort();
+      await updateCoordinator.close();
       await loop;
     },
   };
+}
+
+interface TelegramUpdateCoordinatorOptions {
+  repository: ChatRepository;
+  agentRunner: (options: RunAgentOptions) => Promise<{ text: string }>;
+  compactionEngine?: CompactionEngine;
+  telegram: TelegramPollingTransport;
+}
+
+interface TelegramChatState {
+  processing: boolean;
+  queue: TelegramUpdate[];
+  activeRun?: {
+    abortController: AbortController;
+  };
+}
+
+class TelegramUpdateCoordinator {
+  private readonly chatStates = new Map<string, TelegramChatState>();
+  private readonly pendingTasks = new Set<Promise<void>>();
+  private isClosed = false;
+
+  constructor(private readonly options: TelegramUpdateCoordinatorOptions) {}
+
+  dispatch(update: TelegramUpdate) {
+    if (this.isClosed) {
+      return;
+    }
+
+    if (update.text.trim() === STOP_CHAT_COMMAND) {
+      this.trackTask(this.handleStopCommand(update));
+      return;
+    }
+
+    const state = this.getOrCreateState(update.chatId);
+    state.queue.push(update);
+    this.ensureProcessing(update.chatId);
+  }
+
+  async close() {
+    this.isClosed = true;
+
+    for (const state of this.chatStates.values()) {
+      state.queue.length = 0;
+      state.activeRun?.abortController.abort();
+    }
+
+    await Promise.allSettled([...this.pendingTasks]);
+  }
+
+  private ensureProcessing(chatId: string) {
+    const state = this.getOrCreateState(chatId);
+    if (state.processing) {
+      return;
+    }
+
+    state.processing = true;
+    this.trackTask(
+      this.processChat(chatId).finally(() => {
+        const latestState = this.chatStates.get(chatId);
+        if (!latestState) {
+          return;
+        }
+
+        latestState.processing = false;
+        if (!this.isClosed && latestState.queue.length > 0) {
+          this.ensureProcessing(chatId);
+          return;
+        }
+
+        this.cleanupState(chatId);
+      }),
+    );
+  }
+
+  private async processChat(chatId: string) {
+    const state = this.getOrCreateState(chatId);
+
+    while (!this.isClosed && state.queue.length > 0) {
+      const update = state.queue.shift();
+      if (!update) {
+        return;
+      }
+
+      const abortController = new AbortController();
+      state.activeRun = { abortController };
+
+      try {
+        await handleTelegramMessage({
+          chatId: update.chatId,
+          text: update.text,
+          repository: this.options.repository,
+          agentRunner: (options) =>
+            this.options.agentRunner({
+              ...options,
+              signal: abortController.signal,
+            }),
+          telegram: this.options.telegram,
+          compactionEngine: this.options.compactionEngine,
+          signal: abortController.signal,
+        });
+      } catch (error) {
+        if (!abortController.signal.aborted) {
+          console.error("Telegram update handling failed", error);
+        }
+      } finally {
+        if (state.activeRun?.abortController === abortController) {
+          state.activeRun = undefined;
+        }
+
+        await this.options.repository.markTelegramUpdateHandled(update.chatId, update.updateId);
+      }
+    }
+  }
+
+  private async handleStopCommand(update: TelegramUpdate) {
+    const state = this.getOrCreateState(update.chatId);
+    const droppedUpdates = state.queue.splice(0);
+    const hasActiveRun = Boolean(state.activeRun);
+
+    state.activeRun?.abortController.abort();
+
+    const messageText = hasActiveRun || droppedUpdates.length ? STOPPING_MESSAGE : NOTHING_TO_STOP_MESSAGE;
+    await this.options.telegram.sendMessage(update.chatId, messageText);
+
+    for (const droppedUpdate of droppedUpdates) {
+      await this.options.repository.markTelegramUpdateHandled(droppedUpdate.chatId, droppedUpdate.updateId);
+    }
+
+    await this.options.repository.markTelegramUpdateHandled(update.chatId, update.updateId);
+    this.cleanupState(update.chatId);
+  }
+
+  private getOrCreateState(chatId: string) {
+    let state = this.chatStates.get(chatId);
+    if (!state) {
+      state = {
+        processing: false,
+        queue: [],
+      };
+      this.chatStates.set(chatId, state);
+    }
+    return state;
+  }
+
+  private cleanupState(chatId: string) {
+    const state = this.chatStates.get(chatId);
+    if (!state || state.processing || state.activeRun || state.queue.length > 0) {
+      return;
+    }
+
+    this.chatStates.delete(chatId);
+  }
+
+  private trackTask(task: Promise<void>) {
+    const trackedTask = task
+      .catch((error) => {
+        if (!this.isClosed) {
+          console.error("Telegram coordination failed", error);
+        }
+      })
+      .finally(() => {
+        this.pendingTasks.delete(trackedTask);
+      });
+
+    this.pendingTasks.add(trackedTask);
+  }
 }
 
 class TelegramReplyStreamer {

@@ -698,6 +698,113 @@ describe("Telegram bot message handling", () => {
     expect(telegram.editedMessages).toHaveLength(1);
   });
 
+  it("aborts the active Telegram run and drops queued updates on /stop", async () => {
+    const telegramBot = (await import("../src/telegramBot.js").catch(() => ({}))) as {
+      startTelegramBot?: (options: {
+        repository: ChatRepository;
+        agentRunner: (options: {
+          sessionId: string;
+          threadId: string;
+          messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>;
+          onEvent: (event: { type: string; delta?: string; text?: string }) => void | Promise<void>;
+          signal?: AbortSignal;
+        }) => Promise<{ text: string }>;
+        telegram: {
+          getUpdates: (
+            offset: number,
+            timeoutSeconds: number,
+            signal?: AbortSignal,
+          ) => Promise<Array<{ updateId: number; chatId: string; text: string }>>;
+          sendMessage: (chatId: string, text: string) => Promise<{ messageId: number }>;
+          editMessageText: (chatId: string, messageId: number, text: string) => Promise<void>;
+        };
+        pollTimeoutSeconds?: number;
+        retryDelayMs?: number;
+      }) => Promise<{ close: () => Promise<void> } | null>;
+    };
+
+    expect(telegramBot.startTelegramBot).toBeTypeOf("function");
+
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.db);
+    const telegram = createTelegramTransport();
+    let updateCalls = 0;
+
+    const controller = await telegramBot.startTelegramBot?.({
+      repository,
+      agentRunner: async ({ onEvent, signal }) => {
+        await onEvent({ type: "run.started" });
+        await onEvent({ type: "message.delta", delta: "Working..." });
+
+        await new Promise<void>((resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new Error("aborted"));
+            return;
+          }
+
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+
+        return { text: "should never complete" };
+      },
+      telegram: {
+        ...telegram,
+        async getUpdates(_offset, _timeoutSeconds, signal) {
+          updateCalls += 1;
+          if (updateCalls === 1) {
+            return [
+              { updateId: 1, chatId: "77", text: "Start a long task" },
+              { updateId: 2, chatId: "77", text: "This should be dropped" },
+              { updateId: 3, chatId: "77", text: "/stop" },
+            ];
+          }
+
+          return await new Promise((resolve) => {
+            signal?.addEventListener("abort", () => resolve([]), { once: true });
+          });
+        },
+      },
+      pollTimeoutSeconds: 0,
+      retryDelayMs: 0,
+    });
+
+    await waitFor(async () => {
+      expect(telegram.sentMessages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            chatId: "77",
+            text: "Stopping current activity.",
+          }),
+        ]),
+      );
+      expect(telegram.sentMessages).toHaveLength(2);
+
+      const mapping = await repository.getTelegramChatSession("77");
+      expect(mapping).toBeTruthy();
+
+      const threads = await repository.listThreadsForSession(mapping!.sessionId);
+      expect(threads).toHaveLength(1);
+
+      const messages = await repository.listMessages(threads[0]!.id);
+      expect(messages).toMatchObject([
+        {
+          role: "user",
+          content: "Start a long task",
+          status: "completed",
+        },
+        {
+          role: "assistant",
+          content: "Stopped.",
+          status: "error",
+        },
+      ]);
+      expect(messages).toHaveLength(2);
+    });
+
+    await expect(controller?.close()).resolves.toBeUndefined();
+  });
+
   it("remaps Telegram chats to the compacted session when the engine hands off", async () => {
     const telegramBot = (await import("../src/telegramBot.js").catch(() => ({}))) as {
       handleTelegramMessage?: (options: {

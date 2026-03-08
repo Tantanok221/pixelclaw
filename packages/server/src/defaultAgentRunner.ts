@@ -11,6 +11,7 @@ export interface RunAgentOptions {
   threadId: string;
   messages: ServerAgentMessage[];
   onEvent: (event: AgentRunEvent) => void | Promise<void>;
+  signal?: AbortSignal;
 }
 
 export async function runDefaultAgentTurn(options: RunAgentOptions) {
@@ -18,5 +19,6 @@ export async function runDefaultAgentTurn(options: RunAgentOptions) {
     sessionId: options.sessionId,
     messages: options.messages,
     onEvent: options.onEvent,
+    signal: options.signal,
   });
 }
