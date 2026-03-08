@@ -34,6 +34,12 @@ Example config:
 
 When configured, the server starts a Telegram long-polling bot on boot. Each Telegram chat is treated as a personal inbox with one active session. Send `/new` in Telegram to start a fresh session.
 
+Telegram access is gated per Telegram user. The first message from an unpaired user returns a short-lived local pairing command. Run that command on the machine hosting Pixelclaw to authorize that Telegram user across all of their chats and devices:
+
+```bash
+npm run pair:telegram -- <pairing-code>
+```
+
 ## Scripts
 
 ```bash
@@ -59,6 +65,7 @@ npm run osfmt
 ```text
 packages/
   agent/    Shared Pixelbot agent runtime
+  cli/      Admin CLI commands
   server/   Fastify + SQLite chat backend
   web/      React + Tailwind + shadcn-style chat frontend
 ```

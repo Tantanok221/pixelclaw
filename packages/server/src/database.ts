@@ -55,6 +55,16 @@ export function createDatabase(filename = ":memory:"): DatabaseContext {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS telegram_users (
+      user_id TEXT PRIMARY KEY,
+      is_authorized INTEGER NOT NULL,
+      pairing_code TEXT UNIQUE,
+      pairing_code_expires_at TEXT,
+      paired_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS session_handoffs (
       id TEXT PRIMARY KEY,
       from_session_id TEXT NOT NULL REFERENCES sessions(id),

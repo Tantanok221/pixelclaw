@@ -14,6 +14,8 @@ import {
   type SessionHandoffRow,
   type SessionRow,
   type TelegramChatRow,
+  telegramUsers,
+  type TelegramUserRow,
   type ThreadRow,
 } from "./schema.js";
 
@@ -65,6 +67,73 @@ export class ChatRepository {
       createdAt: now,
       updatedAt: now,
     });
+  }
+
+  async getTelegramUserAccess(userId: string): Promise<TelegramUserRow | undefined> {
+    return this.db.query.telegramUsers.findFirst({
+      where: eq(telegramUsers.userId, userId),
+    });
+  }
+
+  async saveTelegramPairingCode(
+    userId: string,
+    pairingCode: string,
+    pairingCodeExpiresAt: string,
+  ): Promise<void> {
+    const now = nowIso();
+    const existing = await this.getTelegramUserAccess(userId);
+
+    if (existing) {
+      await this.db
+        .update(telegramUsers)
+        .set({
+          isAuthorized: 0,
+          pairingCode,
+          pairingCodeExpiresAt,
+          pairedAt: null,
+          updatedAt: now,
+        })
+        .where(eq(telegramUsers.userId, userId));
+      return;
+    }
+
+    await this.db.insert(telegramUsers).values({
+      userId,
+      isAuthorized: 0,
+      pairingCode,
+      pairingCodeExpiresAt,
+      pairedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  async authorizeTelegramUserByPairingCode(pairingCode: string): Promise<TelegramUserRow | null> {
+    const existing = await this.db.query.telegramUsers.findFirst({
+      where: eq(telegramUsers.pairingCode, pairingCode),
+    });
+
+    if (!existing || !existing.pairingCodeExpiresAt) {
+      return null;
+    }
+
+    if (Date.parse(existing.pairingCodeExpiresAt) <= Date.now()) {
+      return null;
+    }
+
+    const now = nowIso();
+    await this.db
+      .update(telegramUsers)
+      .set({
+        isAuthorized: 1,
+        pairingCode: null,
+        pairingCodeExpiresAt: null,
+        pairedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(telegramUsers.userId, existing.userId));
+
+    return (await this.getTelegramUserAccess(existing.userId)) ?? null;
   }
 
   async markTelegramUpdateHandled(chatId: string, updateId: number): Promise<void> {

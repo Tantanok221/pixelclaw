@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDatabase } from "../src/database.js";
 import { handleTelegramMessage } from "../src/telegramBot.js";
 import { ChatRepository } from "../src/repository.js";
-import { createTelegramTransport } from "./telegram-test-helpers.js";
+import { createTelegramTransport, pairTelegramUser } from "./telegram-test-helpers.js";
 
 describe("Telegram message handling", () => {
   const databases: Array<{ sqlite: { close: () => void } }> = [];
@@ -22,11 +22,13 @@ describe("Telegram message handling", () => {
     const originalSession = await repository.createSession("00000000-0000-4000-8000-000000000003");
     await repository.createThread(originalSession.id);
     await repository.setTelegramChatSession("42", originalSession.id);
+    await pairTelegramUser(repository, "1001");
     const telegram = createTelegramTransport();
     const agentRunner = vi.fn(async () => ({ text: "unused" }));
 
     await handleTelegramMessage({
       chatId: "42",
+      userId: "1001",
       text: "/new",
       repository,
       agentRunner,
@@ -54,9 +56,11 @@ describe("Telegram message handling", () => {
     const repository = new ChatRepository(database.db);
     const telegram = createTelegramTransport();
     const agentRunner = vi.fn(async () => ({ text: "unused" }));
+    await pairTelegramUser(repository, "1001");
 
     await handleTelegramMessage({
       chatId: "42",
+      userId: "1001",
       text: "/help",
       repository,
       agentRunner,
@@ -80,10 +84,12 @@ describe("Telegram message handling", () => {
     const originalSession = await repository.createSession("00000000-0000-4000-8000-000000000031");
     const originalThread = await repository.createThread(originalSession.id);
     await repository.setTelegramChatSession("42", originalSession.id);
+    await pairTelegramUser(repository, "1001");
     const telegram = createTelegramTransport();
 
     await handleTelegramMessage({
       chatId: "42",
+      userId: "1001",
       text: "Trigger handoff",
       repository,
       agentRunner: async ({ messages, onEvent, sessionId }) => {
@@ -138,5 +144,79 @@ describe("Telegram message handling", () => {
 
     const originalMessages = await repository.listMessages(originalThread.id);
     expect(originalMessages).toEqual([]);
+  });
+
+  it("blocks unpaired Telegram users and sends a local pairing command", async () => {
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.db);
+    const telegram = createTelegramTransport();
+    const agentRunner = vi.fn(async () => ({ text: "unused" }));
+
+    await handleTelegramMessage({
+      chatId: "42",
+      userId: "7001",
+      text: "hello",
+      repository,
+      agentRunner,
+      telegram,
+    });
+
+    expect(agentRunner).not.toHaveBeenCalled();
+    expect(telegram.sentMessages).toHaveLength(1);
+    expect(telegram.sentMessages[0]).toMatchObject({
+      chatId: "42",
+    });
+    expect(telegram.sentMessages[0]?.text).toMatch(
+      /npm run pair:telegram -- [A-Z0-9-]+/,
+    );
+  });
+
+  it("allows a paired Telegram user to access the bot from another chat", async () => {
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.db);
+    const telegram = createTelegramTransport();
+    const agentRunner = vi.fn(async ({ onEvent }) => {
+      await onEvent({ type: "run.started" });
+      await onEvent({ type: "message.completed", text: "paired reply" });
+      return { text: "paired reply" };
+    });
+
+    await handleTelegramMessage({
+      chatId: "42",
+      userId: "7001",
+      text: "hello",
+      repository,
+      agentRunner,
+      telegram,
+    });
+
+    const pairingMessage = telegram.sentMessages[0]?.text ?? "";
+    const pairingCode = pairingMessage.match(/npm run pair:telegram -- ([A-Z0-9-]+)/)?.[1];
+    expect(pairingCode).toBeTruthy();
+
+    await repository.authorizeTelegramUserByPairingCode(pairingCode!);
+
+    telegram.sentMessages.length = 0;
+
+    await handleTelegramMessage({
+      chatId: "84",
+      userId: "7001",
+      text: "hello again",
+      repository,
+      agentRunner,
+      telegram,
+    });
+
+    expect(agentRunner).toHaveBeenCalledTimes(1);
+    expect(telegram.sentMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          chatId: "84",
+          text: "...",
+        }),
+      ]),
+    );
   });
 });

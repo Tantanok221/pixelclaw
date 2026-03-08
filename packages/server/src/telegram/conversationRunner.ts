@@ -7,6 +7,7 @@ import {
 import type { ServerAgentMessage } from "../defaultAgentRunner.js";
 import { tryHandleTelegramCommand } from "./commands.js";
 import { TelegramEditableMessage, TelegramStatusMessage } from "./messages.js";
+import { ensureTelegramUserPairing } from "./pairing.js";
 import { getOrCreateTelegramThread } from "./session.js";
 import {
   clampTelegramReplyText,
@@ -21,6 +22,17 @@ import type { HandleTelegramMessageOptions, TelegramStatusSnapshot } from "./typ
 export async function handleTelegramMessage(options: HandleTelegramMessageOptions): Promise<void> {
   const text = options.text.trim();
   if (!text) {
+    return;
+  }
+
+  if (
+    !(await ensureTelegramUserPairing({
+      chatId: options.chatId,
+      userId: options.userId,
+      repository: options.repository,
+      telegram: options.telegram,
+    }))
+  ) {
     return;
   }
 

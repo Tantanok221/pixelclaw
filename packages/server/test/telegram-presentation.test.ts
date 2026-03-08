@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDatabase } from "../src/database.js";
 import { handleTelegramMessage } from "../src/telegramBot.js";
 import { ChatRepository } from "../src/repository.js";
-import { createTelegramTransport } from "./telegram-test-helpers.js";
+import { createTelegramTransport, pairTelegramUser } from "./telegram-test-helpers.js";
 
 describe("Telegram message presentation", () => {
   const databases: Array<{ sqlite: { close: () => void } }> = [];
@@ -21,9 +21,11 @@ describe("Telegram message presentation", () => {
     const repository = new ChatRepository(database.db);
     const telegram = createTelegramTransport();
     vi.useFakeTimers();
+    await pairTelegramUser(repository, "1001");
 
     await handleTelegramMessage({
       chatId: "42",
+      userId: "1001",
       text: "Hello from Telegram",
       repository,
       agentRunner: async ({ onEvent }) => {
@@ -133,9 +135,11 @@ describe("Telegram message presentation", () => {
     const repository = new ChatRepository(database.db);
     const telegram = createTelegramTransport();
     vi.useFakeTimers();
+    await pairTelegramUser(repository, "1001");
 
     await handleTelegramMessage({
       chatId: "42",
+      userId: "1001",
       text: "Stream this reply",
       repository,
       agentRunner: async ({ onEvent }) => {
@@ -205,9 +209,11 @@ describe("Telegram message presentation", () => {
     const repository = new ChatRepository(database.db);
     const telegram = createTelegramTransport();
     vi.useFakeTimers();
+    await pairTelegramUser(repository, "1001");
 
     await handleTelegramMessage({
       chatId: "42",
+      userId: "1001",
       text: "Throttle this reply",
       repository,
       agentRunner: async ({ onEvent }) => {
@@ -238,6 +244,7 @@ describe("Telegram message presentation", () => {
     const database = createDatabase();
     databases.push(database);
     const repository = new ChatRepository(database.db);
+    await pairTelegramUser(repository, "1001");
     const baseTransport = createTelegramTransport();
     const telegram = {
       ...baseTransport,
@@ -253,6 +260,7 @@ describe("Telegram message presentation", () => {
     await expect(
       handleTelegramMessage({
         chatId: "42",
+        userId: "1001",
         text: "Long reply",
         repository,
         agentRunner: async ({ onEvent }) => {
@@ -291,9 +299,11 @@ describe("Telegram message presentation", () => {
       .mockReturnValueOnce(0.2)
       .mockReturnValueOnce(0.25)
       .mockReturnValue(0.3);
+    await pairTelegramUser(repository, "1001");
 
     await handleTelegramMessage({
       chatId: "42",
+      userId: "1001",
       text: "Throttle headline changes",
       repository,
       agentRunner: async ({ onEvent }) => {

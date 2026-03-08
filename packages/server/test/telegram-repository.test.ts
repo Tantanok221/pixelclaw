@@ -43,4 +43,73 @@ describe("Telegram chat persistence", () => {
 
     database.sqlite.close();
   });
+
+  it("stores pending Telegram pairing codes and authorizes users globally", async () => {
+    const database = createDatabase();
+    const repository = new ChatRepository(database.db);
+    const methods = repository as unknown as {
+      getTelegramUserAccess?: (
+        userId: string,
+      ) => Promise<
+        | {
+            userId: string;
+            isAuthorized: number;
+            pairingCode: string | null;
+            pairingCodeExpiresAt: string | null;
+            pairedAt: string | null;
+          }
+        | undefined
+      >;
+      saveTelegramPairingCode?: (
+        userId: string,
+        pairingCode: string,
+        pairingCodeExpiresAt: string,
+      ) => Promise<void>;
+      authorizeTelegramUserByPairingCode?: (
+        pairingCode: string,
+      ) => Promise<
+        | {
+            userId: string;
+            isAuthorized: number;
+            pairingCode: string | null;
+            pairingCodeExpiresAt: string | null;
+            pairedAt: string | null;
+          }
+        | null
+      >;
+    };
+
+    expect(methods.getTelegramUserAccess).toBeTypeOf("function");
+    expect(methods.saveTelegramPairingCode).toBeTypeOf("function");
+    expect(methods.authorizeTelegramUserByPairingCode).toBeTypeOf("function");
+
+    const expiresAt = "2030-01-01T00:10:00.000Z";
+    await methods.saveTelegramPairingCode?.("user-42", "PAIR-1234", expiresAt);
+
+    await expect(methods.getTelegramUserAccess?.("user-42")).resolves.toMatchObject({
+      userId: "user-42",
+      isAuthorized: 0,
+      pairingCode: "PAIR-1234",
+      pairingCodeExpiresAt: expiresAt,
+      pairedAt: null,
+    });
+
+    await expect(methods.authorizeTelegramUserByPairingCode?.("PAIR-1234")).resolves.toMatchObject(
+      {
+        userId: "user-42",
+        isAuthorized: 1,
+        pairingCode: null,
+        pairingCodeExpiresAt: null,
+      },
+    );
+
+    await expect(methods.getTelegramUserAccess?.("user-42")).resolves.toMatchObject({
+      userId: "user-42",
+      isAuthorized: 1,
+      pairingCode: null,
+      pairingCodeExpiresAt: null,
+    });
+
+    database.sqlite.close();
+  });
 });

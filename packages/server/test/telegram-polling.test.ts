@@ -3,7 +3,7 @@ import { createDatabase } from "../src/database.js";
 import type { RunAgentOptions } from "../src/defaultAgentRunner.js";
 import { ChatRepository } from "../src/repository.js";
 import { startTelegramBot } from "../src/telegramBot.js";
-import { createTelegramTransport, waitFor } from "./telegram-test-helpers.js";
+import { createTelegramTransport, pairTelegramUser, waitFor } from "./telegram-test-helpers.js";
 
 describe("Telegram polling and coordination", () => {
   const databases: Array<{ sqlite: { close: () => void } }> = [];
@@ -21,6 +21,7 @@ describe("Telegram polling and coordination", () => {
     databases.push(database);
     const repository = new ChatRepository(database.db);
     const telegram = createTelegramTransport();
+    await pairTelegramUser(repository, "1001");
     let updateCalls = 0;
 
     const controller = await startTelegramBot({
@@ -35,7 +36,7 @@ describe("Telegram polling and coordination", () => {
         async getUpdates(_offset, _timeoutSeconds, signal) {
           updateCalls += 1;
           if (updateCalls === 1) {
-            return [{ updateId: 1, chatId: "99", text: "ping" }];
+            return [{ updateId: 1, chatId: "99", userId: "1001", text: "ping" }];
           }
 
           return await new Promise((resolve) => {
@@ -70,6 +71,7 @@ describe("Telegram polling and coordination", () => {
     databases.push(database);
     const repository = new ChatRepository(database.db);
     const telegram = createTelegramTransport();
+    await pairTelegramUser(repository, "1001");
     let updateCalls = 0;
 
     const controller = await startTelegramBot({
@@ -85,8 +87,8 @@ describe("Telegram polling and coordination", () => {
           updateCalls += 1;
           if (updateCalls === 1) {
             return [
-              { updateId: 1, chatId: "99", text: "ping" },
-              { updateId: 1, chatId: "99", text: "ping" },
+              { updateId: 1, chatId: "99", userId: "1001", text: "ping" },
+              { updateId: 1, chatId: "99", userId: "1001", text: "ping" },
             ];
           }
 
@@ -123,6 +125,7 @@ describe("Telegram polling and coordination", () => {
     databases.push(database);
     const repository = new ChatRepository(database.db);
     const telegram = createTelegramTransport();
+    await pairTelegramUser(repository, "1001");
 
     const createReplayPollingTransport = () => {
       let updateCalls = 0;
@@ -132,10 +135,12 @@ describe("Telegram polling and coordination", () => {
         async getUpdates(_offset: number, _timeoutSeconds: number, signal?: AbortSignal) {
           updateCalls += 1;
           if (updateCalls === 1) {
-            return [{ updateId: 7, chatId: "99", text: "ping" }];
+            return [{ updateId: 7, chatId: "99", userId: "1001", text: "ping" }];
           }
 
-          return await new Promise<Array<{ updateId: number; chatId: string; text: string }>>(
+          return await new Promise<
+            Array<{ updateId: number; chatId: string; userId: string; text: string }>
+          >(
             (resolve) => {
               signal?.addEventListener("abort", () => resolve([]), { once: true });
             },
@@ -202,6 +207,7 @@ describe("Telegram polling and coordination", () => {
     databases.push(database);
     const repository = new ChatRepository(database.db);
     const telegram = createTelegramTransport();
+    await pairTelegramUser(repository, "1001");
     let updateCalls = 0;
 
     const controller = await startTelegramBot({
@@ -231,9 +237,9 @@ describe("Telegram polling and coordination", () => {
           updateCalls += 1;
           if (updateCalls === 1) {
             return [
-              { updateId: 1, chatId: "77", text: "Start a long task" },
-              { updateId: 2, chatId: "77", text: "This should be dropped" },
-              { updateId: 3, chatId: "77", text: "/stop" },
+              { updateId: 1, chatId: "77", userId: "1001", text: "Start a long task" },
+              { updateId: 2, chatId: "77", userId: "1001", text: "This should be dropped" },
+              { updateId: 3, chatId: "77", userId: "1001", text: "/stop" },
             ];
           }
 

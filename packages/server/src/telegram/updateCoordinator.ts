@@ -3,6 +3,7 @@ import type { CompactionEngine } from "../compactionEngine.js";
 import type { RunAgentOptions } from "../defaultAgentRunner.js";
 import type { ChatRepository } from "../repository.js";
 import { handleTelegramMessage } from "./conversationRunner.js";
+import { ensureTelegramUserPairing } from "./pairing.js";
 import type { TelegramPollingTransport, TelegramUpdate } from "./types.js";
 
 interface TelegramUpdateCoordinatorOptions {
@@ -93,6 +94,7 @@ export class TelegramUpdateCoordinator {
       try {
         await handleTelegramMessage({
           chatId: update.chatId,
+          userId: update.userId,
           text: update.text,
           repository: this.options.repository,
           agentRunner: (agentOptions) =>
@@ -119,6 +121,18 @@ export class TelegramUpdateCoordinator {
   }
 
   private async handleStopCommand(update: TelegramUpdate) {
+    if (
+      !(await ensureTelegramUserPairing({
+        chatId: update.chatId,
+        userId: update.userId,
+        repository: this.options.repository,
+        telegram: this.options.telegram,
+      }))
+    ) {
+      await this.options.repository.markTelegramUpdateHandled(update.chatId, update.updateId);
+      return;
+    }
+
     const state = this.getOrCreateState(update.chatId);
     const droppedUpdates = state.queue.splice(0);
     const hasActiveRun = Boolean(state.activeRun);

@@ -66,3 +66,10 @@ export function createTelegramTransport(): TelegramTestTransport {
     },
   };
 }
+
+export async function pairTelegramUser(repository: ChatRepository, userId: string) {
+  const pairingCode = `PAIR-${userId}`;
+  await repository.saveTelegramPairingCode(userId, pairingCode, "2030-01-01T00:10:00.000Z");
+  await repository.authorizeTelegramUserByPairingCode(pairingCode);
+}
+import type { ChatRepository } from "../src/repository.js";

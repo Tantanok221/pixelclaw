@@ -17,7 +17,14 @@ export function createTelegramClient(botToken: string): TelegramPollingTransport
     async getUpdates(offset, timeoutSeconds, signal) {
       const response = await postTelegram<
         TelegramApiResult<
-          Array<{ update_id: number; message?: { chat?: { id?: number | string }; text?: string } }>
+          Array<{
+            update_id: number;
+            message?: {
+              chat?: { id?: number | string };
+              from?: { id?: number | string };
+              text?: string;
+            };
+          }>
         >
       >(
         `${baseUrl}/getUpdates`,
@@ -33,14 +40,16 @@ export function createTelegramClient(botToken: string): TelegramPollingTransport
         .map((update) => {
           const text = update.message?.text?.trim();
           const chatId = update.message?.chat?.id;
+          const userId = update.message?.from?.id;
 
-          if (!text || chatId === undefined) {
+          if (!text || chatId === undefined || userId === undefined) {
             return null;
           }
 
           return {
             updateId: update.update_id,
             chatId: String(chatId),
+            userId: String(userId),
             text,
           };
         })

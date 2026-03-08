@@ -6,6 +6,7 @@ import type { ChatRepository } from "../repository.js";
 export interface TelegramUpdate {
   updateId: number;
   chatId: string;
+  userId: string;
   text: string;
 }
 
@@ -39,6 +40,7 @@ export interface TelegramStreamOptions {
 
 export interface HandleTelegramMessageOptions {
   chatId: string;
+  userId: string;
   text: string;
   repository: ChatRepository;
   agentRunner: (options: RunAgentOptions) => Promise<{ text: string }>;
