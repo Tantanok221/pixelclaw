@@ -7,3 +7,8 @@ coverage/
 .env.local
 .env.*.local
 auth.json
+docs/plans
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.tsbuildinfo

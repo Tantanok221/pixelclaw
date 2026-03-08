@@ -8,12 +8,15 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "turbo run dev --filter=agent",
+    "dev": "turbo run dev --parallel --filter=server --filter=web",
+    "dev:server": "npm run dev --workspace=server",
+    "dev:web": "npm run dev --workspace=web",
+    "dev:agent": "npm run dev --workspace=agent --",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
-    "start": "turbo run start --filter=agent",
+    "start": "npm run start --workspace=server",
     "test": "turbo run test",
-    "test:watch": "turbo run test:watch --filter=agent",
+    "test:watch": "turbo run test:watch --filter=server --filter=web --filter=agent",
     "lint": "turbo run lint",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

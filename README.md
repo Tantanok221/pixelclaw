@@ -1,6 +1,6 @@
 # Pixelclaw
 
-Minimal Turborepo workspace for building agent packages with PI AI packages.
+Turborepo workspace for the Pixelclaw chat app and agent runtime.
 
 ## Requirements
 
@@ -13,14 +13,19 @@ npm install
 cp .env.example .env
 ```
 
-Add your `OPENAI_API_KEY` to `.env`.
+The web app talks to the Fastify backend in `packages/server`, and the backend invokes the agent runtime in `packages/agent`.
 
 ## Scripts
 
 ```bash
-npm run dev -- "Say hi from pixelbot"
+npm run dev
+
+npm run dev:web
+npm run dev:server
+npm run dev:agent -- "Say hi from pixelbot"
+
 npm run build
-npm run start -- "Say hi from pixelbot"
+npm run start
 
 npm run test
 npm run typecheck
@@ -34,5 +39,7 @@ npm run osfmt
 
 ```text
 packages/
-  agent/    Current Pixelbot runtime and tests
+  agent/    Shared Pixelbot agent runtime
+  server/   Fastify + SQLite chat backend
+  web/      React + Tailwind + shadcn-style chat frontend
 ```
