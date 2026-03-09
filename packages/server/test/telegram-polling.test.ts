@@ -19,7 +19,7 @@ describe("Telegram polling and coordination", () => {
   it("starts polling when configured and shuts down cleanly", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     await pairTelegramUser(repository, "1001");
     let updateCalls = 0;
@@ -69,7 +69,7 @@ describe("Telegram polling and coordination", () => {
   it("ignores duplicate Telegram updates in the same polling batch", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     await pairTelegramUser(repository, "1001");
     let updateCalls = 0;
@@ -123,7 +123,7 @@ describe("Telegram polling and coordination", () => {
   it("does not reply twice when Telegram replays an already handled update after restart", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     await pairTelegramUser(repository, "1001");
 
@@ -205,7 +205,7 @@ describe("Telegram polling and coordination", () => {
   it("aborts the active Telegram run and drops queued updates on /stop", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     await pairTelegramUser(repository, "1001");
     let updateCalls = 0;

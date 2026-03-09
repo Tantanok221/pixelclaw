@@ -5,7 +5,7 @@ import { ChatRepository } from "../src/repository.js";
 describe("compaction engine", () => {
   it("records session handoffs with a summary message reference", async () => {
     const database = createDatabase();
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const methods = repository as unknown as {
       createSessionHandoff?: (input: {
         fromSessionId: string;
@@ -68,7 +68,7 @@ describe("compaction engine", () => {
     expect(compactionModule.createCompactionEngine).toBeTypeOf("function");
 
     const database = createDatabase();
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const session = await repository.createSession("00000000-0000-4000-8000-000000000021");
     const thread = await repository.createThread(session.id);
     await repository.createMessage({
@@ -162,7 +162,7 @@ describe("compaction engine", () => {
     expect(compactionModule.createCompactionEngine).toBeTypeOf("function");
 
     const database = createDatabase();
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const session = await repository.createSession("00000000-0000-4000-8000-000000000022");
     const thread = await repository.createThread(session.id);
 
@@ -212,7 +212,7 @@ describe("compaction engine", () => {
     expect(compactionModule.createCompactionEngine).toBeTypeOf("function");
 
     const database = createDatabase();
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const session = await repository.createSession("00000000-0000-4000-8000-000000000023");
     const thread = await repository.createThread(session.id);
     await repository.createMessage({

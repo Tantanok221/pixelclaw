@@ -17,7 +17,7 @@ describe("Telegram chat persistence", () => {
 
   it("stores and rotates the mapped session for a Telegram chat", async () => {
     const database = createDatabase();
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const methods = repository as unknown as {
       setTelegramChatSession?: (chatId: string, sessionId: string) => Promise<void>;
       getTelegramChatSession?: (chatId: string) => Promise<{ chatId: string; sessionId: string } | undefined>;
@@ -46,7 +46,7 @@ describe("Telegram chat persistence", () => {
 
   it("stores pending Telegram pairing codes and authorizes users globally", async () => {
     const database = createDatabase();
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const methods = repository as unknown as {
       getTelegramUserAccess?: (
         userId: string,

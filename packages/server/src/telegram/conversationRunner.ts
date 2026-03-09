@@ -75,6 +75,18 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
     threadId: prepared.thread.id,
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
+    source: "telegram",
+  });
+  await options.repository.createRunEvent({
+    runId: run.id,
+    threadId: prepared.thread.id,
+    sessionId: prepared.session.id,
+    source: "telegram",
+    type: "run.created",
+    payload: {
+      assistantMessageId: assistantMessage.id,
+      userMessageId: userMessage.id,
+    },
   });
 
   const statusStartedAtMs = Date.now();
@@ -99,6 +111,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
 
   let assistantText = "";
   let hasCompletedEvent = false;
+  let hasFailedEvent = false;
   let hasSentFinalReply = false;
   let startedAt: string | null = null;
   let eventChain = Promise.resolve();
@@ -157,6 +170,14 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
       finishedAt: new Date().toISOString(),
       error: TELEGRAM_MESSAGES.stoppedError,
     });
+    await options.repository.createRunEvent({
+      runId: run.id,
+      threadId: prepared.thread.id,
+      sessionId: prepared.session.id,
+      source: "telegram",
+      type: "run.failed",
+      payload: { error: TELEGRAM_MESSAGES.stoppedError },
+    });
     statusSnapshot.state = "stopped";
     statusSnapshot.error = TELEGRAM_MESSAGES.stoppedError;
     statusSnapshot.toolName ??= statusSnapshot.lastToolName;
@@ -192,11 +213,26 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
               startedAt,
               error: null,
             });
+            await options.repository.createRunEvent({
+              runId: run.id,
+              threadId: prepared.thread.id,
+              sessionId: prepared.session.id,
+              source: "telegram",
+              type: event.type,
+            });
             return;
           }
 
           if (event.type === "run.state.changed") {
             statusSnapshot.state = mapRunState(event.state);
+            await options.repository.createRunEvent({
+              runId: run.id,
+              threadId: prepared.thread.id,
+              sessionId: prepared.session.id,
+              source: "telegram",
+              type: event.type,
+              payload: { state: event.state },
+            });
             updateHeadline();
             await syncStatus();
             return;
@@ -209,6 +245,17 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
             statusSnapshot.lastToolName = statusSnapshot.toolName;
             statusSnapshot.lastTarget = statusSnapshot.target;
             statusSnapshot.error = undefined;
+            await options.repository.createRunEvent({
+              runId: run.id,
+              threadId: prepared.thread.id,
+              sessionId: prepared.session.id,
+              source: "telegram",
+              type: event.type,
+              payload: {
+                toolName: event.toolName,
+                args: event.args,
+              },
+            });
             updateHeadline();
             await syncStatus();
             return;
@@ -219,6 +266,18 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
             statusSnapshot.toolName = undefined;
             statusSnapshot.target = undefined;
             statusSnapshot.error = undefined;
+            await options.repository.createRunEvent({
+              runId: run.id,
+              threadId: prepared.thread.id,
+              sessionId: prepared.session.id,
+              source: "telegram",
+              type: event.type,
+              payload: {
+                toolName: event.toolName,
+                args: event.args,
+                isError: event.isError,
+              },
+            });
             updateHeadline();
             await syncStatus();
             return;
@@ -226,6 +285,14 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
 
           if (event.type === "todo.updated") {
             statusSnapshot.todos = event.todoDocument.todos;
+            await options.repository.createRunEvent({
+              runId: run.id,
+              threadId: prepared.thread.id,
+              sessionId: prepared.session.id,
+              source: "telegram",
+              type: event.type,
+              payload: event.todoDocument,
+            });
             await syncStatus();
             return;
           }
@@ -242,6 +309,14 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
               status: "streaming",
               startedAt,
               error: null,
+            });
+            await options.repository.createRunEvent({
+              runId: run.id,
+              threadId: prepared.thread.id,
+              sessionId: prepared.session.id,
+              source: "telegram",
+              type: event.type,
+              payload: { delta: event.delta },
             });
 
             if (statusSnapshot.state !== "finalizing") {
@@ -266,6 +341,14 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
               finishedAt: new Date().toISOString(),
               error: null,
             });
+            await options.repository.createRunEvent({
+              runId: run.id,
+              threadId: prepared.thread.id,
+              sessionId: prepared.session.id,
+              source: "telegram",
+              type: event.type,
+              payload: { text: assistantText },
+            });
             await sendFinalReply(assistantText);
             return;
           }
@@ -280,6 +363,15 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
             startedAt,
             finishedAt: new Date().toISOString(),
             error: event.error,
+          });
+          hasFailedEvent = true;
+          await options.repository.createRunEvent({
+            runId: run.id,
+            threadId: prepared.thread.id,
+            sessionId: prepared.session.id,
+            source: "telegram",
+            type: event.type,
+            payload: { error: event.error },
           });
           statusSnapshot.state = "failed";
           statusSnapshot.error = event.error;
@@ -302,7 +394,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
       return;
     }
 
-    if (!hasCompletedEvent) {
+    if (!hasCompletedEvent && !hasFailedEvent) {
       startedAt ??= new Date().toISOString();
       const finalText = assistantText || result.text;
       await options.repository.updateMessage(assistantMessage.id, {
@@ -314,6 +406,14 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
         startedAt,
         finishedAt: new Date().toISOString(),
         error: null,
+      });
+      await options.repository.createRunEvent({
+        runId: run.id,
+        threadId: prepared.thread.id,
+        sessionId: prepared.session.id,
+        source: "telegram",
+        type: "message.completed",
+        payload: { text: finalText },
       });
       await sendFinalReply(finalText);
     }
@@ -338,6 +438,14 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
       startedAt,
       finishedAt: new Date().toISOString(),
       error: message,
+    });
+    await options.repository.createRunEvent({
+      runId: run.id,
+      threadId: prepared.thread.id,
+      sessionId: prepared.session.id,
+      source: "telegram",
+      type: "run.failed",
+      payload: { error: message },
     });
     statusSnapshot.state = "failed";
     statusSnapshot.error = message;

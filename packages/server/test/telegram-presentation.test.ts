@@ -18,7 +18,7 @@ describe("Telegram message presentation", () => {
   it("shows a sticky status message and deletes it after sending the final reply", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     vi.useFakeTimers();
     await pairTelegramUser(repository, "1001");
@@ -132,7 +132,7 @@ describe("Telegram message presentation", () => {
   it("creates the streaming reply message immediately and keeps it separate from the sticky status", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     vi.useFakeTimers();
     await pairTelegramUser(repository, "1001");
@@ -206,7 +206,7 @@ describe("Telegram message presentation", () => {
   it("throttles streamed reply edits and flushes the final reply on completion", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     vi.useFakeTimers();
     await pairTelegramUser(repository, "1001");
@@ -243,7 +243,7 @@ describe("Telegram message presentation", () => {
   it("truncates Telegram reply edits to avoid oversize 400 errors", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     await pairTelegramUser(repository, "1001");
     const baseTransport = createTelegramTransport();
     const telegram = {
@@ -288,7 +288,7 @@ describe("Telegram message presentation", () => {
   it("only rotates the whimsical headline at most once every 5 seconds for tool updates", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     vi.useFakeTimers();
     vi.spyOn(Math, "random")

@@ -296,4 +296,177 @@ describe("chat backend", () => {
       ],
     });
   });
+
+  it("returns admin run detail with the persisted transcript and audit timeline", async () => {
+    const app = await buildServer({
+      agentRunner: async ({ onEvent }) => {
+        await onEvent({ type: "run.started" });
+        await onEvent({ type: "run.state.changed", state: "planning" });
+        await onEvent({ type: "tool.started", toolName: "read", args: { path: "README.md" } });
+        await onEvent({ type: "tool.completed", toolName: "read", args: { path: "README.md" }, isError: false });
+        await onEvent({
+          type: "todo.updated",
+          todoDocument: {
+            sessionId: "session-1",
+            updatedAt: "2026-03-09T10:00:00.000Z",
+            todos: [{ id: "todo-1", text: "Inspect README", status: "done", note: "Captured in audit trail" }],
+          },
+        });
+        await onEvent({ type: "message.completed", text: "Observed current system state." });
+        return { text: "Observed current system state." };
+      },
+    });
+    apps.push(app);
+
+    const createResponse = await app.inject({
+      method: "POST",
+      url: "/api/chat/messages",
+      payload: { content: "Inspect the system" },
+    });
+
+    const sessionCookie = extractCookie(createResponse.headers["set-cookie"], "pixelclaw_session");
+    const { runId, threadId } = createResponse.json();
+
+    await app.inject({
+      method: "GET",
+      url: `/api/chat/runs/${runId}/stream`,
+      headers: {
+        cookie: `pixelclaw_session=${sessionCookie}`,
+      },
+    });
+
+    const detailResponse = await app.inject({
+      method: "GET",
+      url: `/api/admin/runs/${runId}`,
+    });
+
+    expect(detailResponse.statusCode).toBe(200);
+    expect(detailResponse.json()).toMatchObject({
+      run: {
+        id: runId,
+        threadId,
+        status: "completed",
+        source: "web",
+      },
+      messages: [
+        { role: "user", content: "Inspect the system", status: "completed" },
+        { role: "assistant", content: "Observed current system state.", status: "completed" },
+      ],
+    });
+
+    const eventsResponse = await app.inject({
+      method: "GET",
+      url: `/api/admin/runs/${runId}/events`,
+    });
+
+    expect(eventsResponse.statusCode).toBe(200);
+    expect(eventsResponse.json()).toMatchObject({
+      events: [
+        { type: "run.created", source: "web" },
+        { type: "run.started", source: "web" },
+        { type: "run.state.changed", source: "web" },
+        { type: "tool.started", source: "web" },
+        { type: "tool.completed", source: "web" },
+        { type: "todo.updated", source: "web" },
+        { type: "message.completed", source: "web" },
+      ],
+    });
+    expect(eventsResponse.json().events[3]).toMatchObject({
+      type: "tool.started",
+      payload: {
+        toolName: "read",
+        args: { path: "README.md" },
+      },
+    });
+  });
+
+  it("returns admin overview and run list across all sessions", async () => {
+    const app = await buildServer({
+      agentRunner: async ({ messages, onEvent }) => {
+        await onEvent({ type: "run.started" });
+        const latestPrompt = messages.at(-1)?.content ?? "";
+
+        if (latestPrompt === "Investigate failure") {
+          await onEvent({ type: "run.failed", error: "Investigation failed" });
+          return { text: "" };
+        }
+
+        await onEvent({ type: "message.completed", text: "Everything looks stable." });
+        return { text: "Everything looks stable." };
+      },
+    });
+    apps.push(app);
+
+    const firstResponse = await app.inject({
+      method: "POST",
+      url: "/api/chat/messages",
+      payload: { content: "System check" },
+    });
+    const firstCookie = extractCookie(firstResponse.headers["set-cookie"], "pixelclaw_session");
+    const firstRunId = firstResponse.json().runId;
+
+    await app.inject({
+      method: "GET",
+      url: `/api/chat/runs/${firstRunId}/stream`,
+      headers: {
+        cookie: `pixelclaw_session=${firstCookie}`,
+      },
+    });
+
+    const secondResponse = await app.inject({
+      method: "POST",
+      url: "/api/chat/messages",
+      payload: { content: "Investigate failure" },
+    });
+    const secondCookie = extractCookie(secondResponse.headers["set-cookie"], "pixelclaw_session");
+    const secondRunId = secondResponse.json().runId;
+
+    await app.inject({
+      method: "GET",
+      url: `/api/chat/runs/${secondRunId}/stream`,
+      headers: {
+        cookie: `pixelclaw_session=${secondCookie}`,
+      },
+    });
+
+    const overviewResponse = await app.inject({
+      method: "GET",
+      url: "/api/admin/overview",
+    });
+
+    expect(overviewResponse.statusCode).toBe(200);
+    expect(overviewResponse.json()).toMatchObject({
+      counts: {
+        activeRuns: 0,
+        failedRunsLast24Hours: 1,
+        runsLast24Hours: 2,
+        activeSessions: 0,
+      },
+    });
+
+    const runsResponse = await app.inject({
+      method: "GET",
+      url: "/api/admin/runs",
+    });
+
+    expect(runsResponse.statusCode).toBe(200);
+    expect(runsResponse.json()).toMatchObject({
+      runs: [
+        {
+          id: secondRunId,
+          status: "failed",
+          source: "web",
+          latestEventType: "run.failed",
+          preview: "Investigation failed",
+        },
+        {
+          id: firstRunId,
+          status: "completed",
+          source: "web",
+          latestEventType: "message.completed",
+          preview: "Everything looks stable.",
+        },
+      ],
+    });
+  });
 });

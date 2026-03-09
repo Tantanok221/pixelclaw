@@ -18,7 +18,7 @@ describe("Telegram message handling", () => {
   it("resets the Telegram chat to a fresh session on /new", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const originalSession = await repository.createSession("00000000-0000-4000-8000-000000000003");
     await repository.createThread(originalSession.id);
     await repository.setTelegramChatSession("42", originalSession.id);
@@ -53,7 +53,7 @@ describe("Telegram message handling", () => {
   it("returns deterministic command help on /help", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     const agentRunner = vi.fn(async () => ({ text: "unused" }));
     await pairTelegramUser(repository, "1001");
@@ -80,7 +80,7 @@ describe("Telegram message handling", () => {
   it("remaps Telegram chats to the compacted session when the engine hands off", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const originalSession = await repository.createSession("00000000-0000-4000-8000-000000000031");
     const originalThread = await repository.createThread(originalSession.id);
     await repository.setTelegramChatSession("42", originalSession.id);
@@ -149,7 +149,7 @@ describe("Telegram message handling", () => {
   it("blocks unpaired Telegram users and sends a local pairing command", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     const agentRunner = vi.fn(async () => ({ text: "unused" }));
 
@@ -175,7 +175,7 @@ describe("Telegram message handling", () => {
   it("allows a paired Telegram user to access the bot from another chat", async () => {
     const database = createDatabase();
     databases.push(database);
-    const repository = new ChatRepository(database.db);
+    const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     const agentRunner = vi.fn(async ({ onEvent }) => {
       await onEvent({ type: "run.started" });

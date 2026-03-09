@@ -22,7 +22,7 @@ export interface BuildServerOptions {
 export async function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify();
   const database = createDatabase(options.databasePath);
-  const repository = new ChatRepository(database.db);
+  const repository = new ChatRepository(database.daos);
   const agentRunner = options.agentRunner ?? runDefaultAgentTurn;
   const resolvedCompactionEngine = options.compactionEngine ?? compactionEngine;
   const telegramBot = await (options.telegramBotStarter ?? startTelegramBot)({
@@ -130,6 +130,18 @@ export async function buildServer(options: BuildServerOptions = {}) {
       threadId: prepared.thread.id,
       userMessageId: userMessage.id,
       assistantMessageId: assistantMessage.id,
+      source: "web",
+    });
+    await repository.createRunEvent({
+      runId: run.id,
+      threadId: prepared.thread.id,
+      sessionId: prepared.session.id,
+      source: "web",
+      type: "run.created",
+      payload: {
+        assistantMessageId: assistantMessage.id,
+        userMessageId: userMessage.id,
+      },
     });
 
     reply.code(201);
@@ -170,6 +182,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
 
     let assistantText = "";
     let hasCompletedEvent = false;
+    let hasFailedEvent = false;
     let eventChain = Promise.resolve();
 
     const writeEvent = (event: string, data: Record<string, string> = {}) => {
@@ -183,6 +196,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
 
       return Object.fromEntries(entries);
     };
+    const extractEventPayload = (event: Exclude<Parameters<RunAgentOptions["onEvent"]>[0], undefined>) =>
+      Object.fromEntries(Object.entries(event).filter(([key]) => key !== "type"));
 
     try {
       await agentRunner({
@@ -199,6 +214,13 @@ export async function buildServer(options: BuildServerOptions = {}) {
         onEvent: (event) => {
           eventChain = eventChain.then(async () => {
             if (event.type === "run.started") {
+              await repository.createRunEvent({
+                runId: context.run.id,
+                threadId: context.thread.id,
+                sessionId: session.id,
+                source: "web",
+                type: event.type,
+              });
               writeEvent(event.type);
               return;
             }
@@ -208,6 +230,14 @@ export async function buildServer(options: BuildServerOptions = {}) {
               await repository.updateMessage(context.run.assistantMessageId, {
                 content: assistantText,
                 status: "streaming",
+              });
+              await repository.createRunEvent({
+                runId: context.run.id,
+                threadId: context.thread.id,
+                sessionId: session.id,
+                source: "web",
+                type: event.type,
+                payload: { delta: event.delta },
               });
               writeEvent(event.type, { delta: event.delta });
               return;
@@ -225,11 +255,27 @@ export async function buildServer(options: BuildServerOptions = {}) {
                 finishedAt: new Date().toISOString(),
                 error: null,
               });
+              await repository.createRunEvent({
+                runId: context.run.id,
+                threadId: context.thread.id,
+                sessionId: session.id,
+                source: "web",
+                type: event.type,
+                payload: { text: assistantText },
+              });
               writeEvent(event.type, { text: assistantText });
               return;
             }
 
             if (event.type !== "run.failed") {
+              await repository.createRunEvent({
+                runId: context.run.id,
+                threadId: context.thread.id,
+                sessionId: session.id,
+                source: "web",
+                type: event.type,
+                payload: extractEventPayload(event),
+              });
               writeEvent(event.type, serializeEventData(event));
               return;
             }
@@ -243,6 +289,15 @@ export async function buildServer(options: BuildServerOptions = {}) {
               finishedAt: new Date().toISOString(),
               error: event.error,
             });
+            hasFailedEvent = true;
+            await repository.createRunEvent({
+              runId: context.run.id,
+              threadId: context.thread.id,
+              sessionId: session.id,
+              source: "web",
+              type: event.type,
+              payload: { error: event.error },
+            });
             writeEvent(event.type, { error: event.error });
           });
           return eventChain;
@@ -250,7 +305,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
       });
       await eventChain;
 
-      if (!hasCompletedEvent) {
+      if (!hasCompletedEvent && !hasFailedEvent) {
         await repository.updateMessage(context.run.assistantMessageId, {
           content: assistantText,
           status: "completed",
@@ -259,6 +314,14 @@ export async function buildServer(options: BuildServerOptions = {}) {
           status: "completed",
           finishedAt: new Date().toISOString(),
           error: null,
+        });
+        await repository.createRunEvent({
+          runId: context.run.id,
+          threadId: context.thread.id,
+          sessionId: session.id,
+          source: "web",
+          type: "message.completed",
+          payload: { text: assistantText },
         });
         writeEvent("message.completed", { text: assistantText });
       }
@@ -273,10 +336,58 @@ export async function buildServer(options: BuildServerOptions = {}) {
         finishedAt: new Date().toISOString(),
         error: message,
       });
+      await repository.createRunEvent({
+        runId: context.run.id,
+        threadId: context.thread.id,
+        sessionId: session.id,
+        source: "web",
+        type: "run.failed",
+        payload: { error: message },
+      });
       writeEvent("run.failed", { error: message });
     } finally {
       reply.raw.end();
     }
+  });
+
+  app.get("/api/admin/overview", async () => repository.getAdminOverview());
+
+  app.get("/api/admin/runs", async () => ({
+    runs: await repository.listAdminRuns(),
+  }));
+
+  app.get("/api/admin/runs/:runId", async (request, reply) => {
+    const params = request.params as { runId: string };
+
+    try {
+      return await repository.getAdminRun(params.runId);
+    } catch (error: unknown) {
+      reply.code(404);
+      return { error: error instanceof Error ? error.message : "Run not found" };
+    }
+  });
+
+  app.get("/api/admin/runs/:runId/events", async (request, reply) => {
+    const params = request.params as { runId: string };
+    const run = await repository.getAdminRun(params.runId).catch(() => null);
+    if (!run) {
+      reply.code(404);
+      return { error: "Run not found" };
+    }
+
+    const events = await repository.listRunEvents(params.runId);
+    return {
+      events: events.map((event) => ({
+        id: event.id,
+        runId: event.runId,
+        threadId: event.threadId,
+        sessionId: event.sessionId,
+        source: event.source,
+        type: event.type,
+        payload: event.parsedPayload,
+        createdAt: event.createdAt,
+      })),
+    };
   });
 
   return app;
