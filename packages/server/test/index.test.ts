@@ -2,6 +2,7 @@ import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadServerEnv } from "../src/env.js";
 import { resolveDatabasePath } from "../src/index.js";
 
 const tempDirs: string[] = [];
@@ -14,9 +15,36 @@ async function createTempDir(prefix: string) {
 
 afterEach(async () => {
   delete process.env.DATABASE_PATH;
+  delete process.env.OPENROUTER_API_KEY;
   delete process.env.PIXELCLAW_HOME;
   vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+describe("loadServerEnv", () => {
+  it("loads workspace root .env values when the server starts from a package directory", async () => {
+    const workspaceRoot = await createTempDir("pixelclaw-workspace-");
+    const serverDir = path.join(workspaceRoot, "packages", "server");
+    delete process.env.OPENROUTER_API_KEY;
+
+    await mkdir(serverDir, { recursive: true });
+    await writeFile(
+      path.join(workspaceRoot, "package.json"),
+      JSON.stringify({ workspaces: ["packages/*"] }, null, 2),
+      "utf-8",
+    );
+    await writeFile(path.join(workspaceRoot, "turbo.json"), JSON.stringify({}, null, 2), "utf-8");
+    await writeFile(
+      path.join(workspaceRoot, ".env"),
+      "OPENROUTER_API_KEY=from-workspace-env\n",
+      "utf-8",
+    );
+
+    const loadedEnvPath = await loadServerEnv(serverDir);
+
+    expect(loadedEnvPath).toBe(path.join(workspaceRoot, ".env"));
+    expect(process.env.OPENROUTER_API_KEY).toBe("from-workspace-env");
+  });
 });
 
 describe("resolveDatabasePath", () => {

@@ -5,12 +5,13 @@ import {
   ensureAgentWorkspaceRoot,
 } from "../../agent/src/workspaceRoot.js";
 import { buildServer } from "./app.js";
+import { loadServerEnv } from "./env.js";
 import { resolveTelegramConfigPath as resolveTelegramConfigPathFromFile } from "./telegramConfig.js";
 
-const port = Number(process.env.PORT ?? 3001);
-const host = process.env.HOST ?? "127.0.0.1";
-
 async function main() {
+  await loadServerEnv();
+  const port = Number(process.env.PORT ?? 3001);
+  const host = process.env.HOST ?? "127.0.0.1";
   const databasePath = await resolveDatabasePath();
   const app = await buildServer({ databasePath });
   await app.listen({ port, host });
