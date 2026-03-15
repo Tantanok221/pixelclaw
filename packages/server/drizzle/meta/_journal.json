@@ -8,6 +8,34 @@
       "when": 1773066646803,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1773099900000,
+      "tag": "0001_monitor_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1773100800000,
+      "tag": "0002_monitor_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1773101700000,
+      "tag": "0003_monitor_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1773115200000,
+      "tag": "0004_telegram_chat_mode",
+      "breakpoints": true
     }
   ]
 }

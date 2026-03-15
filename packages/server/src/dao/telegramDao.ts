@@ -22,7 +22,7 @@ export class TelegramChatsDao {
 
   async updateByChatId(
     chatId: string,
-    patch: Partial<Pick<TelegramChatRow, "sessionId" | "lastUpdateId" | "updatedAt">>,
+    patch: Partial<Pick<TelegramChatRow, "sessionId" | "lastUpdateId" | "mode" | "updatedAt">>,
   ): Promise<void> {
     await this.db.update(telegramChats).set(patch).where(eq(telegramChats.chatId, chatId));
   }

@@ -22,6 +22,11 @@ const APPLICATION_TABLES = [
   "telegram_chats",
   "telegram_users",
   "session_handoffs",
+  "monitor_events",
+  "monitor_notifications",
+  "github_accounts",
+  "monitors",
+  "monitor_pr_snapshots",
 ] as const;
 
 export function createDatabase(filename = ":memory:"): DatabaseContext {
@@ -99,6 +104,7 @@ function repairLegacySchema(sqlite: Database.Database) {
     CREATE TABLE IF NOT EXISTS telegram_chats (
       chat_id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL REFERENCES sessions(id),
+      mode TEXT NOT NULL DEFAULT 'work',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -120,6 +126,73 @@ function repairLegacySchema(sqlite: Database.Database) {
       summary_message_id TEXT NOT NULL REFERENCES messages(id),
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS monitor_events (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      source_key TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS monitor_events_source_key_unique
+      ON monitor_events (source_key);
+
+    CREATE TABLE IF NOT EXISTS monitor_notifications (
+      id TEXT PRIMARY KEY,
+      monitor_event_id TEXT NOT NULL REFERENCES monitor_events(id),
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      read_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS github_accounts (
+      id TEXT PRIMARY KEY,
+      provider_user_id TEXT NOT NULL,
+      login TEXT NOT NULL,
+      display_name TEXT,
+      avatar_url TEXT,
+      access_token TEXT NOT NULL,
+      scopes TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS monitors (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      github_account_id TEXT NOT NULL REFERENCES github_accounts(id),
+      owner TEXT NOT NULL,
+      repo TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      poll_interval_seconds INTEGER NOT NULL,
+      next_poll_at TEXT NOT NULL,
+      last_polled_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS monitor_pr_snapshots (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL REFERENCES monitors(id),
+      pr_number INTEGER NOT NULL,
+      pr_title TEXT NOT NULL,
+      pr_url TEXT NOT NULL,
+      head_sha TEXT NOT NULL,
+      mergeable_state TEXT,
+      checks_state TEXT NOT NULL,
+      latest_external_comment_id TEXT,
+      latest_external_comment_author_login TEXT,
+      latest_external_comment_body TEXT,
+      latest_external_comment_url TEXT,
+      latest_external_comment_created_at TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   const telegramChatColumns = sqlite
@@ -128,6 +201,10 @@ function repairLegacySchema(sqlite: Database.Database) {
 
   if (!telegramChatColumns.some((column) => column.name === "last_update_id")) {
     sqlite.exec("ALTER TABLE telegram_chats ADD COLUMN last_update_id INTEGER");
+  }
+
+  if (!telegramChatColumns.some((column) => column.name === "mode")) {
+    sqlite.exec("ALTER TABLE telegram_chats ADD COLUMN mode TEXT NOT NULL DEFAULT 'work'");
   }
 
   const runColumns = sqlite.prepare("PRAGMA table_info(runs)").all() as Array<{ name?: string }>;

@@ -24,10 +24,36 @@ export async function tryHandleTelegramCommand(
     return true;
   }
 
+  const requestedMode = parseTelegramModeCommand(options.text);
+  if (requestedMode) {
+    await options.repository.setTelegramChatMode(options.chatId, requestedMode);
+    await options.telegram.sendMessage(
+      options.chatId,
+      requestedMode === "chat" ? TELEGRAM_MESSAGES.modeSetChat : TELEGRAM_MESSAGES.modeSetWork,
+    );
+    return true;
+  }
+
+  if (options.text.startsWith(`${TELEGRAM_COMMANDS.mode} `) || options.text === TELEGRAM_COMMANDS.mode) {
+    await options.telegram.sendMessage(options.chatId, TELEGRAM_MESSAGES.invalidMode);
+    return true;
+  }
+
   if (options.text === TELEGRAM_COMMANDS.stop) {
     await options.telegram.sendMessage(options.chatId, TELEGRAM_MESSAGES.nothingToStop);
     return true;
   }
 
   return false;
+}
+
+function parseTelegramModeCommand(text: string): "work" | "chat" | null {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^\/mode\s+(chat|work)$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  return match[1].toLowerCase() === "chat" ? "chat" : "work";
 }

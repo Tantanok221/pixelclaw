@@ -20,11 +20,22 @@ describe("Telegram chat persistence", () => {
     const repository = new ChatRepository(database.daos);
     const methods = repository as unknown as {
       setTelegramChatSession?: (chatId: string, sessionId: string) => Promise<void>;
-      getTelegramChatSession?: (chatId: string) => Promise<{ chatId: string; sessionId: string } | undefined>;
+      getTelegramChatSession?: (
+        chatId: string,
+      ) => Promise<
+        | {
+            chatId: string;
+            sessionId: string;
+            mode: string;
+          }
+        | undefined
+      >;
+      setTelegramChatMode?: (chatId: string, mode: "chat" | "work") => Promise<void>;
     };
 
     expect(methods.setTelegramChatSession).toBeTypeOf("function");
     expect(methods.getTelegramChatSession).toBeTypeOf("function");
+    expect(methods.setTelegramChatMode).toBeTypeOf("function");
 
     const firstSession = await repository.createSession("00000000-0000-4000-8000-000000000001");
     const secondSession = await repository.createSession("00000000-0000-4000-8000-000000000002");
@@ -33,12 +44,15 @@ describe("Telegram chat persistence", () => {
     await expect(methods.getTelegramChatSession?.("1234")).resolves.toMatchObject({
       chatId: "1234",
       sessionId: firstSession.id,
+      mode: "work",
     });
 
+    await methods.setTelegramChatMode?.("1234", "chat");
     await methods.setTelegramChatSession?.("1234", secondSession.id);
     await expect(methods.getTelegramChatSession?.("1234")).resolves.toMatchObject({
       chatId: "1234",
       sessionId: secondSession.id,
+      mode: "chat",
     });
 
     database.sqlite.close();

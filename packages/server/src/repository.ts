@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { ServerDaos } from "./dao/index.js";
+import type { MonitorNotificationRecord } from "./dao/monitorNotificationsDao.js";
+import type { NotificationBroadcaster } from "./notifications.js";
 import type {
+  GithubAccountRow,
+  MonitorNotificationRow,
+  MonitorPrSnapshotRow,
+  MonitorRow,
   MessageRow,
   RunEventRow,
   RunRow,
@@ -12,9 +18,13 @@ import type {
 } from "./schema.js";
 
 export type RunSource = "web" | "telegram";
+export type TelegramChatMode = "work" | "chat";
 
 export class ChatRepository {
-  constructor(private readonly daos: ServerDaos) {}
+  constructor(
+    private readonly daos: ServerDaos,
+    private readonly notificationBroadcaster?: NotificationBroadcaster,
+  ) {}
 
   async createSession(id = randomUUID()): Promise<SessionRow> {
     const now = nowIso();
@@ -51,6 +61,30 @@ export class ChatRepository {
       chatId,
       sessionId,
       lastUpdateId: null,
+      mode: "work",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  async setTelegramChatMode(chatId: string, mode: TelegramChatMode): Promise<void> {
+    const now = nowIso();
+    const existing = await this.getTelegramChatSession(chatId);
+
+    if (existing) {
+      await this.daos.telegramChats.updateByChatId(chatId, {
+        mode,
+        updatedAt: now,
+      });
+      return;
+    }
+
+    const session = await this.createSession();
+    await this.daos.telegramChats.insert({
+      chatId,
+      sessionId: session.id,
+      lastUpdateId: null,
+      mode,
       createdAt: now,
       updatedAt: now,
     });
@@ -388,6 +422,243 @@ export class ChatRepository {
     };
   }
 
+  async createMonitorNotification(input: {
+    monitorId: string;
+    provider: string;
+    eventType: string;
+    title: string;
+    payload?: unknown;
+    sourceKey: string;
+  }) {
+    const existingEvent = await this.daos.monitorEvents.findBySourceKey(input.sourceKey);
+    if (existingEvent) {
+      const existingNotification = await this.daos.monitorNotifications.findByEventId(existingEvent.id);
+      if (existingNotification) {
+        return this.getRequiredMonitorNotification(existingNotification.id);
+      }
+    }
+
+    const createdAt = nowIso();
+    const eventId = existingEvent?.id ?? randomUUID();
+    const notificationId = randomUUID();
+
+    if (!existingEvent) {
+      await this.daos.monitorEvents.insert({
+        id: eventId,
+        monitorId: input.monitorId,
+        provider: input.provider,
+        type: input.eventType,
+        title: input.title,
+        payload: serializePayload(input.payload),
+        sourceKey: input.sourceKey,
+        createdAt,
+      });
+    }
+
+    const notificationRow: MonitorNotificationRow = {
+      id: notificationId,
+      monitorEventId: eventId,
+      status: "unread",
+      createdAt,
+      readAt: null,
+    };
+
+    await this.daos.monitorNotifications.insert(notificationRow);
+
+    const notification = await this.getRequiredMonitorNotification(notificationId);
+    this.notificationBroadcaster?.publish(notification);
+    return notification;
+  }
+
+  async listMonitorNotifications() {
+    const notifications = await this.daos.monitorNotifications.listWithEvents();
+    return notifications.map(parseMonitorNotificationRecord);
+  }
+
+  async createGithubAccount(input: {
+    providerUserId: string;
+    login: string;
+    displayName?: string | null;
+    avatarUrl?: string | null;
+    accessToken: string;
+    scopes: string[];
+  }) {
+    const now = nowIso();
+    const existing = await this.daos.githubAccounts.findByProviderUserId(input.providerUserId);
+
+    if (existing) {
+      await this.daos.githubAccounts.updateById(existing.id, {
+        login: input.login,
+        displayName: input.displayName ?? null,
+        avatarUrl: input.avatarUrl ?? null,
+        accessToken: input.accessToken,
+        scopes: serializePayload(input.scopes),
+        updatedAt: now,
+      });
+      return this.getRequiredGithubAccount(existing.id);
+    }
+
+    const id = randomUUID();
+    await this.daos.githubAccounts.insert({
+      id,
+      providerUserId: input.providerUserId,
+      login: input.login,
+      displayName: input.displayName ?? null,
+      avatarUrl: input.avatarUrl ?? null,
+      accessToken: input.accessToken,
+      scopes: serializePayload(input.scopes),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return this.getRequiredGithubAccount(id);
+  }
+
+  async listGithubAccounts() {
+    const accounts = await this.daos.githubAccounts.listAll();
+    return accounts.map(parseGithubAccountRecord);
+  }
+
+  async getGithubAccount(id: string) {
+    const account = await this.daos.githubAccounts.findById(id);
+    return account ? parseGithubAccountRecord(account) : null;
+  }
+
+  async createMonitor(input: {
+    githubAccountId: string;
+    owner: string;
+    repo: string;
+    name: string;
+  }) {
+    const account = await this.daos.githubAccounts.findById(input.githubAccountId);
+    if (!account) {
+      return null;
+    }
+
+    const id = randomUUID();
+    const now = nowIso();
+    await this.daos.monitors.insert({
+      id,
+      provider: "github",
+      githubAccountId: input.githubAccountId,
+      owner: input.owner,
+      repo: input.repo,
+      name: input.name,
+      status: "active",
+      pollIntervalSeconds: 45,
+      nextPollAt: now,
+      lastPolledAt: null,
+      lastError: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return this.getRequiredMonitor(id, 0);
+  }
+
+  async listMonitors() {
+    const monitors = await this.daos.monitors.listAll();
+    const notifications = await this.listMonitorNotifications();
+    const unreadByMonitorId = new Map<string, number>();
+
+    for (const notification of notifications) {
+      if (notification.status !== "unread") {
+        continue;
+      }
+
+      unreadByMonitorId.set(
+        notification.monitorId,
+        (unreadByMonitorId.get(notification.monitorId) ?? 0) + 1,
+      );
+    }
+
+    return monitors.map((monitor) => parseMonitorRecord(monitor, unreadByMonitorId.get(monitor.id) ?? 0));
+  }
+
+  async getMonitor(id: string) {
+    const monitor = await this.daos.monitors.findById(id);
+    return monitor ? parseMonitorRecord(monitor, 0) : null;
+  }
+
+  async getMonitorWithAccount(id: string) {
+    const monitor = await this.daos.monitors.findById(id);
+    if (!monitor) {
+      return null;
+    }
+
+    const githubAccount = await this.daos.githubAccounts.findById(monitor.githubAccountId);
+    if (!githubAccount) {
+      return null;
+    }
+
+    return {
+      monitor: parseMonitorRecord(monitor, 0),
+      githubAccount,
+    };
+  }
+
+  async listDueMonitors(now = nowIso()) {
+    const monitors = await this.daos.monitors.listAll();
+    return monitors
+      .filter((monitor) => monitor.status === "active" && monitor.nextPollAt <= now)
+      .map((monitor) => parseMonitorRecord(monitor, 0));
+  }
+
+  async updateMonitorPollingState(
+    id: string,
+    patch: Partial<Pick<MonitorRow, "status" | "nextPollAt" | "lastPolledAt" | "lastError" | "updatedAt">>,
+  ) {
+    const existing = await this.daos.monitors.findById(id);
+    if (!existing) {
+      throw new Error(`Monitor not found: ${id}`);
+    }
+
+    await this.daos.monitors.updateById(id, {
+      ...existing,
+      status: patch.status ?? existing.status,
+      nextPollAt: patch.nextPollAt ?? existing.nextPollAt,
+      lastPolledAt: patch.lastPolledAt ?? existing.lastPolledAt,
+      lastError: patch.lastError ?? existing.lastError,
+      updatedAt: patch.updatedAt ?? existing.updatedAt,
+    });
+
+    return this.getRequiredMonitor(id, 0);
+  }
+
+  async listMonitorPrSnapshots(monitorId: string) {
+    return this.daos.monitorPrSnapshots.listByMonitor(monitorId);
+  }
+
+  async upsertMonitorPrSnapshot(
+    monitorId: string,
+    input: Omit<MonitorPrSnapshotRow, "id" | "monitorId" | "updatedAt">,
+  ) {
+    const existing = await this.daos.monitorPrSnapshots.findByMonitorAndPrNumber(monitorId, input.prNumber);
+    const updatedAt = nowIso();
+
+    if (existing) {
+      await this.daos.monitorPrSnapshots.updateById(existing.id, {
+        ...existing,
+        ...input,
+        updatedAt,
+      });
+      return this.getRequiredMonitorPrSnapshot(existing.id);
+    }
+
+    const id = randomUUID();
+    await this.daos.monitorPrSnapshots.insert({
+      id,
+      monitorId,
+      ...input,
+      updatedAt,
+    });
+    return this.getRequiredMonitorPrSnapshot(id);
+  }
+
+  async deleteMonitorPrSnapshot(id: string) {
+    await this.daos.monitorPrSnapshots.deleteById(id);
+  }
+
   private async getRequiredSession(id: string) {
     const session = await this.getSession(id);
     if (!session) {
@@ -444,6 +715,60 @@ export class ChatRepository {
     return handoff;
   }
 
+  private async getRequiredMonitorEvent(id: string) {
+    const event = await this.daos.monitorEvents.findById(id);
+    if (!event) {
+      throw new Error(`Monitor event not found: ${id}`);
+    }
+    return event;
+  }
+
+  private async getRequiredMonitorNotification(id: string) {
+    const notification = await this.daos.monitorNotifications.findById(id);
+    if (!notification) {
+      throw new Error(`Monitor notification not found: ${id}`);
+    }
+
+    const event = await this.getRequiredMonitorEvent(notification.monitorEventId);
+    return parseMonitorNotificationRecord({
+      id: notification.id,
+      eventId: event.id,
+      monitorId: event.monitorId,
+      provider: event.provider,
+      eventType: event.type,
+      title: event.title,
+      payload: event.payload,
+      sourceKey: event.sourceKey,
+      status: notification.status,
+      createdAt: notification.createdAt,
+      readAt: notification.readAt,
+    });
+  }
+
+  private async getRequiredGithubAccount(id: string) {
+    const account = await this.daos.githubAccounts.findById(id);
+    if (!account) {
+      throw new Error(`GitHub account not found: ${id}`);
+    }
+    return parseGithubAccountRecord(account);
+  }
+
+  private async getRequiredMonitor(id: string, unreadCount = 0) {
+    const monitor = await this.daos.monitors.findById(id);
+    if (!monitor) {
+      throw new Error(`Monitor not found: ${id}`);
+    }
+    return parseMonitorRecord(monitor, unreadCount);
+  }
+
+  private async getRequiredMonitorPrSnapshot(id: string) {
+    const snapshot = await this.daos.monitorPrSnapshots.findById(id);
+    if (!snapshot) {
+      throw new Error(`Monitor PR snapshot not found: ${id}`);
+    }
+    return snapshot;
+  }
+
   private async touchThread(threadId: string, updatedAt = nowIso()) {
     await this.daos.threads.updateById(threadId, { updatedAt });
   }
@@ -471,6 +796,28 @@ function parsePayload(payload: string) {
   } catch {
     return { raw: payload };
   }
+}
+
+function parseMonitorNotificationRecord(record: MonitorNotificationRecord) {
+  return {
+    ...record,
+    payload: typeof record.payload === "string" ? parsePayload(record.payload) : record.payload,
+  };
+}
+
+function parseGithubAccountRecord(record: GithubAccountRow) {
+  const parsedScopes = parsePayload(record.scopes);
+  return {
+    ...record,
+    scopes: Array.isArray(parsedScopes) ? (parsedScopes as string[]) : [],
+  };
+}
+
+function parseMonitorRecord(record: MonitorRow, unreadCount = 0) {
+  return {
+    ...record,
+    unreadCount,
+  };
 }
 
 function statusPriority(status: string) {

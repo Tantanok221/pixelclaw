@@ -71,7 +71,44 @@ describe("Telegram message handling", () => {
     expect(telegram.sentMessages).toEqual([
       {
         chatId: "42",
-        text: "Available commands:\n/new - Start a new chat.\n/stop - Stop the current activity.",
+        text: [
+          "Available commands:",
+          '/new - Start a new chat.',
+          "/mode work - Use the work agent with tools.",
+          "/mode chat - Use the chat voice agent.",
+          "/stop - Stop the current activity.",
+        ].join("\n"),
+        messageId: 1,
+      },
+    ]);
+  });
+
+  it("switches the Telegram chat into chat mode on /mode chat", async () => {
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.daos);
+    const telegram = createTelegramTransport();
+    const agentRunner = vi.fn(async () => ({ text: "unused" }));
+    await pairTelegramUser(repository, "1001");
+
+    await handleTelegramMessage({
+      chatId: "42",
+      userId: "1001",
+      text: "/mode chat",
+      repository,
+      agentRunner,
+      telegram,
+    });
+
+    expect(agentRunner).not.toHaveBeenCalled();
+    await expect(repository.getTelegramChatSession("42")).resolves.toMatchObject({
+      chatId: "42",
+      mode: "chat",
+    });
+    expect(telegram.sentMessages).toEqual([
+      {
+        chatId: "42",
+        text: 'Mode set to "chat".',
         messageId: 1,
       },
     ]);
@@ -218,5 +255,34 @@ describe("Telegram message handling", () => {
         }),
       ]),
     );
+  });
+
+  it("runs the chat voice agent when the Telegram chat is in chat mode", async () => {
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.daos);
+    const telegram = createTelegramTransport();
+    await pairTelegramUser(repository, "7001");
+    const session = await repository.createSession("00000000-0000-4000-8000-000000000099");
+    await repository.createThread(session.id);
+    await repository.setTelegramChatSession("84", session.id);
+    await repository.setTelegramChatMode("84", "chat");
+    const agentRunner = vi.fn(async ({ mode, onEvent }) => {
+      expect(mode).toBe("chat");
+      await onEvent({ type: "run.started" });
+      await onEvent({ type: "message.completed", text: "chat reply" });
+      return { text: "chat reply" };
+    });
+
+    await handleTelegramMessage({
+      chatId: "84",
+      userId: "7001",
+      text: "hello again",
+      repository,
+      agentRunner,
+      telegram,
+    });
+
+    expect(agentRunner).toHaveBeenCalledTimes(1);
   });
 });

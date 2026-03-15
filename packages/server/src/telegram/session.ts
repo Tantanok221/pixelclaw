@@ -3,6 +3,7 @@ import type { ChatRepository } from "../repository.js";
 export async function getOrCreateTelegramThread(repository: ChatRepository, chatId: string) {
   const mapping = await repository.getTelegramChatSession(chatId);
   let session = mapping ? await repository.getSession(mapping.sessionId) : undefined;
+  const mode: "work" | "chat" = mapping?.mode === "chat" ? "chat" : "work";
 
   if (!session) {
     session = await repository.createSession();
@@ -17,7 +18,7 @@ export async function getOrCreateTelegramThread(repository: ChatRepository, chat
     thread = await repository.createThread(session.id);
   }
 
-  return { session, thread };
+  return { session, thread, mode };
 }
 
 export async function resetTelegramChatSession(repository: ChatRepository, chatId: string) {

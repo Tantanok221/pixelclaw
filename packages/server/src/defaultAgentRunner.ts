@@ -9,6 +9,7 @@ export interface ServerAgentMessage {
 export interface RunAgentOptions {
   sessionId: string;
   threadId: string;
+  mode?: "work" | "chat";
   messages: ServerAgentMessage[];
   onEvent: (event: AgentRunEvent) => void | Promise<void>;
   signal?: AbortSignal;
@@ -17,6 +18,7 @@ export interface RunAgentOptions {
 export async function runDefaultAgentTurn(options: RunAgentOptions) {
   return runAgentThread({
     sessionId: options.sessionId,
+    mode: options.mode,
     messages: options.messages,
     onEvent: options.onEvent,
     signal: options.signal,

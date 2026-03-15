@@ -192,6 +192,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
     const result = await options.agentRunner({
       sessionId: prepared.session.id,
       threadId: prepared.thread.id,
+      mode: context.mode,
       messages: threadMessages
         .filter((message) => message.id !== assistantMessage.id)
         .filter((message) => message.role === "user" || message.status === "completed")
