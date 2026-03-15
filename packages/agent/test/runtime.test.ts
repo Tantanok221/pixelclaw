@@ -198,6 +198,7 @@ describe("runAgentThread", () => {
     const events: Array<{ type: string; [key: string]: unknown }> = [];
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "pixelclaw-runtime-"));
     const nestedCwd = path.join(workspaceRoot, "apps", "chat");
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     await mkdir(nestedCwd, { recursive: true });
     process.env.OPENROUTER_API_KEY = "openrouter-test-key";
     await writeFile(path.join(workspaceRoot, "identity.md"), "Speak with crisp confidence.");
@@ -270,6 +271,8 @@ describe("runAgentThread", () => {
       id: "x-ai/grok-4.1-fast",
       api: "openai-completions",
     });
+    expect(consoleLogSpy).toHaveBeenNthCalledWith(1, "[work:main] Base answer");
+    expect(consoleLogSpy).toHaveBeenNthCalledWith(2, "[work:paraphrase] Vibed answer");
     await expect(
       (paraphraseOptions.getApiKey as (() => Promise<string | undefined>))(),
     ).resolves.toBe("openrouter-test-key");
@@ -277,73 +280,16 @@ describe("runAgentThread", () => {
       { type: "run.started" },
       { type: "run.state.changed", state: "planning" },
       { type: "run.state.changed", state: "finalizing" },
-      { type: "message.delta", delta: "Vibed answer" },
+      { type: "message.delta", delta: "Base answer" },
+      { type: "message.replaced", text: "Vibed answer" },
       { type: "message.completed", text: "Vibed answer" },
-    ]);
-  });
-
-  it("uses the chat voice agent as the primary agent in chat mode", async () => {
-    const events: Array<{ type: string; [key: string]: unknown }> = [];
-    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "pixelclaw-runtime-"));
-    process.env.OPENROUTER_API_KEY = "openrouter-test-key";
-    await writeFile(path.join(workspaceRoot, "identity.md"), "Speak with crisp confidence.");
-    await writeFile(path.join(workspaceRoot, "souls.md"), "Keep the tone warm and slightly playful.");
-
-    queuedAgentScenarios.push({
-      events: [
-        { type: "turn_start" },
-        {
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "Chat mode answer" },
-        },
-        {
-          type: "message_update",
-          assistantMessageEvent: {
-            type: "done",
-            message: createAssistantMessage("Chat mode answer"),
-          },
-        },
-      ],
-    });
-
-    const { runAgentThread } = await import("../src/runtime.js");
-    const result = await runAgentThread({
-      cwd: workspaceRoot,
-      mode: "chat",
-      messages: [{ role: "user", content: "Hi" }],
-      onEvent: (event) => events.push(event),
-    });
-
-    expect(result.text).toBe("Chat mode answer");
-    expect(capturedAgentOptions).toHaveLength(1);
-    const [agentOptions] = capturedAgentOptions;
-    const initialState = agentOptions.initialState as Record<string, unknown>;
-    const model = initialState.model as Record<string, unknown>;
-
-    expect(model).toMatchObject({
-      provider: "openrouter",
-      id: "x-ai/grok-4.1-fast",
-      api: "openai-completions",
-    });
-    expect(initialState.tools).toEqual([]);
-    expect(initialState.systemPrompt).toEqual(
-      expect.stringContaining("Speak with crisp confidence."),
-    );
-    expect(initialState.systemPrompt).toEqual(
-      expect.stringContaining("Keep the tone warm and slightly playful."),
-    );
-    expect(events).toEqual([
-      { type: "run.started" },
-      { type: "run.state.changed", state: "planning" },
-      { type: "run.state.changed", state: "finalizing" },
-      { type: "message.delta", delta: "Chat mode answer" },
-      { type: "message.completed", text: "Chat mode answer" },
     ]);
   });
 
   it("falls back to the original response when the paraphrase pass fails", async () => {
     const events: Array<{ type: string; [key: string]: unknown }> = [];
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "pixelclaw-runtime-"));
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     await writeFile(path.join(workspaceRoot, "identity.md"), "Sharp voice.");
 
     queuedAgentScenarios.push(
@@ -377,11 +323,58 @@ describe("runAgentThread", () => {
 
     expect(result.text).toBe("Raw answer");
     expect(capturedAgentOptions).toHaveLength(2);
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+    expect(consoleLogSpy).toHaveBeenCalledWith("[work:main] Raw answer");
     expect(events).toEqual([
       { type: "run.started" },
       { type: "run.state.changed", state: "planning" },
       { type: "run.state.changed", state: "finalizing" },
+      { type: "message.delta", delta: "Raw answer" },
       { type: "message.completed", text: "Raw answer" },
+    ]);
+  });
+
+  it("skips work-mode paraphrasing when the toggle is disabled", async () => {
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "pixelclaw-runtime-"));
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await writeFile(path.join(workspaceRoot, "identity.md"), "Sharp voice.");
+    await writeFile(path.join(workspaceRoot, "souls.md"), "Warm voice.");
+
+    queuedAgentScenarios.push({
+      events: [
+        { type: "turn_start" },
+        {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "Unchanged answer" },
+        },
+        {
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "done",
+            message: createAssistantMessage("Unchanged answer"),
+          },
+        },
+      ],
+    });
+
+    const { runAgentThread } = await import("../src/runtime.js");
+    const result = await runAgentThread({
+      cwd: workspaceRoot,
+      paraphraseEnabled: false,
+      messages: [{ role: "user", content: "Hi" }],
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.text).toBe("Unchanged answer");
+    expect(capturedAgentOptions).toHaveLength(1);
+    expect(consoleLogSpy).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      { type: "run.started" },
+      { type: "run.state.changed", state: "planning" },
+      { type: "run.state.changed", state: "finalizing" },
+      { type: "message.delta", delta: "Unchanged answer" },
+      { type: "message.completed", text: "Unchanged answer" },
     ]);
   });
 });

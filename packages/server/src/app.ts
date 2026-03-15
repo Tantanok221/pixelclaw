@@ -243,6 +243,24 @@ export async function buildServer(options: BuildServerOptions = {}) {
               return;
             }
 
+            if (event.type === "message.replaced") {
+              assistantText = event.text;
+              await repository.updateMessage(context.run.assistantMessageId, {
+                content: assistantText,
+                status: "streaming",
+              });
+              await repository.createRunEvent({
+                runId: context.run.id,
+                threadId: context.thread.id,
+                sessionId: session.id,
+                source: "web",
+                type: event.type,
+                payload: { text: assistantText },
+              });
+              writeEvent(event.type, { text: assistantText });
+              return;
+            }
+
             if (event.type === "message.completed") {
               hasCompletedEvent = true;
               assistantText = event.text;

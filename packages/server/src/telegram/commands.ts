@@ -24,18 +24,22 @@ export async function tryHandleTelegramCommand(
     return true;
   }
 
-  const requestedMode = parseTelegramModeCommand(options.text);
-  if (requestedMode) {
-    await options.repository.setTelegramChatMode(options.chatId, requestedMode);
+  if (isTelegramParaphraseToggleCommand(options.text)) {
+    const paraphraseEnabled = await options.repository.toggleTelegramChatParaphrase(options.chatId);
     await options.telegram.sendMessage(
       options.chatId,
-      requestedMode === "chat" ? TELEGRAM_MESSAGES.modeSetChat : TELEGRAM_MESSAGES.modeSetWork,
+      paraphraseEnabled
+        ? TELEGRAM_MESSAGES.paraphraseEnabled
+        : TELEGRAM_MESSAGES.paraphraseDisabled,
     );
     return true;
   }
 
-  if (options.text.startsWith(`${TELEGRAM_COMMANDS.mode} `) || options.text === TELEGRAM_COMMANDS.mode) {
-    await options.telegram.sendMessage(options.chatId, TELEGRAM_MESSAGES.invalidMode);
+  if (
+    options.text.startsWith(`${TELEGRAM_COMMANDS.toggle} `) ||
+    options.text === TELEGRAM_COMMANDS.toggle
+  ) {
+    await options.telegram.sendMessage(options.chatId, TELEGRAM_MESSAGES.invalidToggle);
     return true;
   }
 
@@ -47,13 +51,6 @@ export async function tryHandleTelegramCommand(
   return false;
 }
 
-function parseTelegramModeCommand(text: string): "work" | "chat" | null {
-  const trimmed = text.trim();
-  const match = trimmed.match(/^\/mode\s+(chat|work)$/i);
-
-  if (!match) {
-    return null;
-  }
-
-  return match[1].toLowerCase() === "chat" ? "chat" : "work";
+function isTelegramParaphraseToggleCommand(text: string): boolean {
+  return /^\/toggle\s+(paraphrase|paraphase)$/i.test(text.trim());
 }

@@ -74,8 +74,7 @@ describe("Telegram message handling", () => {
         text: [
           "Available commands:",
           '/new - Start a new chat.',
-          "/mode work - Use the work agent with tools.",
-          "/mode chat - Use the chat voice agent.",
+          "/toggle paraphrase - Toggle reply paraphrasing on or off.",
           "/stop - Stop the current activity.",
         ].join("\n"),
         messageId: 1,
@@ -83,7 +82,7 @@ describe("Telegram message handling", () => {
     ]);
   });
 
-  it("switches the Telegram chat into chat mode on /mode chat", async () => {
+  it("toggles work-mode paraphrasing off on /toggle paraphrase", async () => {
     const database = createDatabase();
     databases.push(database);
     const repository = new ChatRepository(database.daos);
@@ -94,7 +93,7 @@ describe("Telegram message handling", () => {
     await handleTelegramMessage({
       chatId: "42",
       userId: "1001",
-      text: "/mode chat",
+      text: "/toggle paraphrase",
       repository,
       agentRunner,
       telegram,
@@ -103,12 +102,63 @@ describe("Telegram message handling", () => {
     expect(agentRunner).not.toHaveBeenCalled();
     await expect(repository.getTelegramChatSession("42")).resolves.toMatchObject({
       chatId: "42",
-      mode: "chat",
+      paraphraseEnabled: 0,
     });
     expect(telegram.sentMessages).toEqual([
       {
         chatId: "42",
-        text: 'Mode set to "chat".',
+        text: 'Paraphrase is now "off".',
+        messageId: 1,
+      },
+    ]);
+  });
+
+  it("accepts /toggle paraphase as an alias for the paraphrase toggle", async () => {
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.daos);
+    const telegram = createTelegramTransport();
+    const agentRunner = vi.fn(async () => ({ text: "unused" }));
+    await pairTelegramUser(repository, "1001");
+
+    await handleTelegramMessage({
+      chatId: "42",
+      userId: "1001",
+      text: "/toggle paraphase",
+      repository,
+      agentRunner,
+      telegram,
+    });
+
+    expect(agentRunner).not.toHaveBeenCalled();
+    await expect(repository.getTelegramChatSession("42")).resolves.toMatchObject({
+      chatId: "42",
+      paraphraseEnabled: 0,
+    });
+  });
+
+  it("returns usage guidance for invalid /toggle commands", async () => {
+    const database = createDatabase();
+    databases.push(database);
+    const repository = new ChatRepository(database.daos);
+    const telegram = createTelegramTransport();
+    const agentRunner = vi.fn(async () => ({ text: "unused" }));
+    await pairTelegramUser(repository, "1001");
+
+    await handleTelegramMessage({
+      chatId: "42",
+      userId: "1001",
+      text: "/toggle",
+      repository,
+      agentRunner,
+      telegram,
+    });
+
+    expect(agentRunner).not.toHaveBeenCalled();
+    expect(telegram.sentMessages).toEqual([
+      {
+        chatId: "42",
+        text: "Usage: /toggle paraphrase",
         messageId: 1,
       },
     ]);
@@ -257,21 +307,21 @@ describe("Telegram message handling", () => {
     );
   });
 
-  it("runs the chat voice agent when the Telegram chat is in chat mode", async () => {
+  it("passes the paraphrase toggle through to the agent runner", async () => {
     const database = createDatabase();
     databases.push(database);
     const repository = new ChatRepository(database.daos);
     const telegram = createTelegramTransport();
     await pairTelegramUser(repository, "7001");
-    const session = await repository.createSession("00000000-0000-4000-8000-000000000099");
+    const session = await repository.createSession("00000000-0000-4000-8000-000000000199");
     await repository.createThread(session.id);
     await repository.setTelegramChatSession("84", session.id);
-    await repository.setTelegramChatMode("84", "chat");
-    const agentRunner = vi.fn(async ({ mode, onEvent }) => {
-      expect(mode).toBe("chat");
+    await repository.toggleTelegramChatParaphrase("84");
+    const agentRunner = vi.fn(async ({ paraphraseEnabled, onEvent }) => {
+      expect(paraphraseEnabled).toBe(false);
       await onEvent({ type: "run.started" });
-      await onEvent({ type: "message.completed", text: "chat reply" });
-      return { text: "chat reply" };
+      await onEvent({ type: "message.completed", text: "work reply" });
+      return { text: "work reply" };
     });
 
     await handleTelegramMessage({

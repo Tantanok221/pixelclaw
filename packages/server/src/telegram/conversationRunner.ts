@@ -192,7 +192,7 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
     const result = await options.agentRunner({
       sessionId: prepared.session.id,
       threadId: prepared.thread.id,
-      mode: context.mode,
+      paraphraseEnabled: context.paraphraseEnabled,
       messages: threadMessages
         .filter((message) => message.id !== assistantMessage.id)
         .filter((message) => message.role === "user" || message.status === "completed")
@@ -318,6 +318,36 @@ export async function handleTelegramMessage(options: HandleTelegramMessageOption
               source: "telegram",
               type: event.type,
               payload: { delta: event.delta },
+            });
+
+            if (statusSnapshot.state !== "finalizing") {
+              statusSnapshot.state = "finalizing";
+              updateHeadline(true);
+              await syncStatus();
+            }
+            return;
+          }
+
+          if (event.type === "message.replaced") {
+            startedAt ??= new Date().toISOString();
+            assistantText = event.text;
+            await syncReply(assistantText, true);
+            await options.repository.updateMessage(assistantMessage.id, {
+              content: assistantText,
+              status: "streaming",
+            });
+            await options.repository.updateRun(run.id, {
+              status: "streaming",
+              startedAt,
+              error: null,
+            });
+            await options.repository.createRunEvent({
+              runId: run.id,
+              threadId: prepared.thread.id,
+              sessionId: prepared.session.id,
+              source: "telegram",
+              type: event.type,
+              payload: { text: assistantText },
             });
 
             if (statusSnapshot.state !== "finalizing") {

@@ -150,8 +150,9 @@ describe("chat backend", () => {
         onEvent({ type: "run.started" });
         onEvent({ type: "message.delta", delta: "Hello" });
         onEvent({ type: "message.delta", delta: " world" });
-        onEvent({ type: "message.completed", text: "Hello world" });
-        return { text: "Hello world" };
+        onEvent({ type: "message.replaced", text: "Hey world" });
+        onEvent({ type: "message.completed", text: "Hey world" });
+        return { text: "Hey world" };
       },
     });
     apps.push(app);
@@ -178,7 +179,8 @@ describe("chat backend", () => {
     expect(streamResponse.body).toContain("event: run.started");
     expect(streamResponse.body).toContain('data: {"delta":"Hello"}');
     expect(streamResponse.body).toContain('data: {"delta":" world"}');
-    expect(streamResponse.body).toContain('data: {"text":"Hello world"}');
+    expect(streamResponse.body).toContain('event: message.replaced');
+    expect(streamResponse.body).toContain('data: {"text":"Hey world"}');
 
     const transcript = await app.inject({
       method: "GET",
@@ -192,7 +194,7 @@ describe("chat backend", () => {
       threadId,
       messages: [
         { role: "user", content: "Stream back to me", status: "completed" },
-        { role: "assistant", content: "Hello world", status: "completed" },
+        { role: "assistant", content: "Hey world", status: "completed" },
       ],
     });
   });

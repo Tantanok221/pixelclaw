@@ -26,6 +26,7 @@ export type AgentRunEvent =
   | { type: "tool.completed"; toolName: string; args: unknown; isError: boolean }
   | { type: "todo.updated"; todoDocument: TodoDocument }
   | { type: "message.delta"; delta: string }
+  | { type: "message.replaced"; text: string }
   | { type: "message.completed"; text: string }
   | { type: "run.failed"; error: string };
 
@@ -34,7 +35,7 @@ export interface RunThreadOptions {
   sessionId?: string;
   cwd?: string;
   modelProvider?: BaseModelProvider;
-  mode?: "work" | "chat";
+  paraphraseEnabled?: boolean;
   onEvent?: (event: AgentRunEvent) => void;
   signal?: AbortSignal;
 }
@@ -56,10 +57,9 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
   const workspaceRoot = await ensureAgentWorkspaceRoot();
   const cwd = resolveAgentCwd(options.cwd, workspaceRoot);
   const workModelProvider = options.modelProvider ?? defaultModelProvider;
-  const mode = options.mode ?? "work";
+  const paraphraseEnabled = options.paraphraseEnabled ?? true;
   const voiceInstructions = await loadWorkspaceVoiceInstructions(cwd);
-  const shouldParaphrase = mode === "work" && Boolean(voiceInstructions);
-  const mainModelProvider = mode === "chat" ? paraphraseModelProvider : workModelProvider;
+  const shouldParaphrase = paraphraseEnabled && Boolean(voiceInstructions);
   let currentState: AgentRunState | undefined;
   const toolArgsByCallId = new Map<string, unknown>();
   const emitState = (state: AgentRunState) => {
@@ -72,22 +72,18 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
   };
   const agent = new Agent({
     initialState: {
-      systemPrompt:
-        mode === "chat" ? buildChatModeSystemPrompt(cwd, voiceInstructions) : buildSystemPrompt(cwd),
-      model: mainModelProvider.getModel(),
-      tools:
-        mode === "chat"
-          ? []
-          : createAgentTools(cwd, {
-              sessionId: options.sessionId,
-              onTodoUpdate: (todoDocument) => {
-                options.onEvent?.({ type: "todo.updated", todoDocument });
-              },
-            }),
-      messages: options.messages.map((message) => toAgentMessage(message, mainModelProvider)),
+      systemPrompt: buildSystemPrompt(cwd),
+      model: workModelProvider.getModel(),
+      tools: createAgentTools(cwd, {
+        sessionId: options.sessionId,
+        onTodoUpdate: (todoDocument) => {
+          options.onEvent?.({ type: "todo.updated", todoDocument });
+        },
+      }),
+      messages: options.messages.map((message) => toAgentMessage(message, workModelProvider)),
     },
     sessionId: options.sessionId,
-    getApiKey: async () => mainModelProvider.getApiKey(cwd),
+    getApiKey: async () => workModelProvider.getApiKey(cwd),
   });
 
   options.onEvent?.({ type: "run.started" });
@@ -140,9 +136,7 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
     if (streamEvent.type === "text_delta") {
       emitState("finalizing");
       textChunks.push(streamEvent.delta);
-      if (!shouldParaphrase) {
-        options.onEvent?.({ type: "message.delta", delta: streamEvent.delta });
-      }
+      options.onEvent?.({ type: "message.delta", delta: streamEvent.delta });
       return;
     }
 
@@ -183,6 +177,7 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
     return { text };
   }
 
+  logWorkModeOutput("main", text);
   const paraphrasedText = await runParaphrasePass({
     cwd,
     sessionId: options.sessionId,
@@ -196,8 +191,9 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
     return { text };
   }
 
+  logWorkModeOutput("paraphrase", paraphrasedText);
   emitState("finalizing");
-  options.onEvent?.({ type: "message.delta", delta: paraphrasedText });
+  options.onEvent?.({ type: "message.replaced", text: paraphrasedText });
   options.onEvent?.({ type: "message.completed", text: paraphrasedText });
 
   return { text: paraphrasedText };
@@ -314,28 +310,16 @@ function buildParaphraseSystemPrompt(options: { identity: string; souls: string 
     .join("\n\n");
 }
 
-function buildChatModeSystemPrompt(
-  cwd: string,
-  voiceInstructions: { identity: string; souls: string } | null,
-) {
-  return [
-    "You are Pixel in chat mode.",
-    "Reply directly to the user in a natural conversational style.",
-    "No tools are available in this mode.",
-    `Your current working directory is ${cwd}.`,
-    voiceInstructions?.identity ? `Identity:\n${voiceInstructions.identity}` : "",
-    voiceInstructions?.souls ? `Souls:\n${voiceInstructions.souls}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
 function buildParaphraseRequest(text: string) {
   return [
     "Rewrite the assistant reply below with the configured voice while keeping the exact intent and practical content.",
     "Assistant reply:",
     text,
   ].join("\n\n");
+}
+
+function logWorkModeOutput(stage: "main" | "paraphrase", text: string) {
+  console.log(`[work:${stage}] ${text}`);
 }
 
 async function readOptionalFile(filePath: string): Promise<string> {

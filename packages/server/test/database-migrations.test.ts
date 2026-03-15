@@ -88,7 +88,7 @@ describe("database migrations", () => {
           chat_id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL REFERENCES sessions(id),
           last_update_id INTEGER,
-          mode TEXT NOT NULL DEFAULT 'work',
+          paraphrase_enabled INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
@@ -211,7 +211,10 @@ describe("database migrations", () => {
       expect(runEventsTable?.name).toBe("run_events");
       expect(runColumns.some((column) => column.name === "source")).toBe(true);
       expect(telegramChatColumns.some((column) => column.name === "last_update_id")).toBe(true);
-      expect(telegramChatColumns.some((column) => column.name === "mode")).toBe(true);
+      expect(telegramChatColumns.some((column) => column.name === "mode")).toBe(false);
+      expect(telegramChatColumns.some((column) => column.name === "paraphrase_enabled")).toBe(
+        true,
+      );
       expect(migrationRows.length).toBeGreaterThan(0);
 
       database.sqlite.close();

@@ -16,22 +16,21 @@ export const TELEGRAM_PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
 
 export const TELEGRAM_COMMANDS = {
   help: "/help",
-  mode: "/mode",
   new: "/new",
   stop: "/stop",
+  toggle: "/toggle",
 } as const;
 
 export const TELEGRAM_MESSAGES = {
   help: [
     "Available commands:",
     "/new - Start a new chat.",
-    "/mode work - Use the work agent with tools.",
-    "/mode chat - Use the chat voice agent.",
+    "/toggle paraphrase - Toggle reply paraphrasing on or off.",
     "/stop - Stop the current activity.",
   ].join("\n"),
-  invalidMode: "Usage: /mode chat|work",
-  modeSetChat: 'Mode set to "chat".',
-  modeSetWork: 'Mode set to "work".',
+  invalidToggle: "Usage: /toggle paraphrase",
+  paraphraseEnabled: 'Paraphrase is now "on".',
+  paraphraseDisabled: 'Paraphrase is now "off".',
   startedNewChat: "Started a new chat.",
   stopping: "Stopping current activity.",
   nothingToStop: "Nothing is currently running.",

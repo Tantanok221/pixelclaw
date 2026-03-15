@@ -159,8 +159,9 @@ describe("Telegram message presentation", () => {
         await onEvent({ type: "run.state.changed", state: "planning" });
         await onEvent({ type: "message.delta", delta: "Hello" });
         await onEvent({ type: "message.delta", delta: " world" });
-        await onEvent({ type: "message.completed", text: "Hello world" });
-        return { text: "Hello world" };
+        await onEvent({ type: "message.replaced", text: "Hey world" });
+        await onEvent({ type: "message.completed", text: "Hey world" });
+        return { text: "Hey world" };
       },
       telegram,
       streamOptions: {
@@ -188,7 +189,7 @@ describe("Telegram message presentation", () => {
     ).toBe(true);
     expect(
       telegram.editedMessages.some(
-        (message) => message.messageId === 2 && message.text === "Hello world",
+        (message) => message.messageId === 2 && message.text === "Hey world",
       ),
     ).toBe(true);
     expect(

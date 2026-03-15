@@ -26,6 +26,7 @@ export interface ChatClient {
     runId: string,
     handlers: {
       onDelta: (delta: string) => void;
+      onReplaced?: (text: string) => void;
       onCompleted: (text: string) => void;
       onFailed: (error: string) => void;
     },
@@ -111,6 +112,11 @@ export function createChatClient(baseUrl = ""): ChatClient {
 
           if (parsed.event === "message.completed") {
             handlers.onCompleted(parsed.data.text ?? "");
+            continue;
+          }
+
+          if (parsed.event === "message.replaced") {
+            handlers.onReplaced?.(parsed.data.text ?? "");
             continue;
           }
 

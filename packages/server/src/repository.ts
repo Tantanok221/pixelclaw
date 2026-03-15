@@ -18,7 +18,6 @@ import type {
 } from "./schema.js";
 
 export type RunSource = "web" | "telegram";
-export type TelegramChatMode = "work" | "chat";
 
 export class ChatRepository {
   constructor(
@@ -61,22 +60,23 @@ export class ChatRepository {
       chatId,
       sessionId,
       lastUpdateId: null,
-      mode: "work",
+      paraphraseEnabled: 1,
       createdAt: now,
       updatedAt: now,
     });
   }
 
-  async setTelegramChatMode(chatId: string, mode: TelegramChatMode): Promise<void> {
+  async toggleTelegramChatParaphrase(chatId: string): Promise<boolean> {
     const now = nowIso();
     const existing = await this.getTelegramChatSession(chatId);
 
     if (existing) {
+      const paraphraseEnabled = existing.paraphraseEnabled ? 0 : 1;
       await this.daos.telegramChats.updateByChatId(chatId, {
-        mode,
+        paraphraseEnabled,
         updatedAt: now,
       });
-      return;
+      return paraphraseEnabled === 1;
     }
 
     const session = await this.createSession();
@@ -84,10 +84,11 @@ export class ChatRepository {
       chatId,
       sessionId: session.id,
       lastUpdateId: null,
-      mode,
+      paraphraseEnabled: 0,
       createdAt: now,
       updatedAt: now,
     });
+    return false;
   }
 
   async getTelegramUserAccess(userId: string): Promise<TelegramUserRow | undefined> {

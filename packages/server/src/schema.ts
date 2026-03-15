@@ -69,7 +69,7 @@ export const telegramChats = sqliteTable("telegram_chats", {
     .notNull()
     .references(() => sessions.id),
   lastUpdateId: integer("last_update_id"),
-  mode: text("mode").notNull().default("work"),
+  paraphraseEnabled: integer("paraphrase_enabled").notNull().default(1),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

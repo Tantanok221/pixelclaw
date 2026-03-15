@@ -26,16 +26,16 @@ describe("Telegram chat persistence", () => {
         | {
             chatId: string;
             sessionId: string;
-            mode: string;
+            paraphraseEnabled: number;
           }
         | undefined
       >;
-      setTelegramChatMode?: (chatId: string, mode: "chat" | "work") => Promise<void>;
+      toggleTelegramChatParaphrase?: (chatId: string) => Promise<boolean>;
     };
 
     expect(methods.setTelegramChatSession).toBeTypeOf("function");
     expect(methods.getTelegramChatSession).toBeTypeOf("function");
-    expect(methods.setTelegramChatMode).toBeTypeOf("function");
+    expect(methods.toggleTelegramChatParaphrase).toBeTypeOf("function");
 
     const firstSession = await repository.createSession("00000000-0000-4000-8000-000000000001");
     const secondSession = await repository.createSession("00000000-0000-4000-8000-000000000002");
@@ -44,15 +44,15 @@ describe("Telegram chat persistence", () => {
     await expect(methods.getTelegramChatSession?.("1234")).resolves.toMatchObject({
       chatId: "1234",
       sessionId: firstSession.id,
-      mode: "work",
+      paraphraseEnabled: 1,
     });
 
-    await methods.setTelegramChatMode?.("1234", "chat");
+    await expect(methods.toggleTelegramChatParaphrase?.("1234")).resolves.toBe(false);
     await methods.setTelegramChatSession?.("1234", secondSession.id);
     await expect(methods.getTelegramChatSession?.("1234")).resolves.toMatchObject({
       chatId: "1234",
       sessionId: secondSession.id,
-      mode: "chat",
+      paraphraseEnabled: 0,
     });
 
     database.sqlite.close();

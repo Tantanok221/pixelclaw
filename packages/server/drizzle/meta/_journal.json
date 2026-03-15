@@ -36,6 +36,20 @@
       "when": 1773115200000,
       "tag": "0004_telegram_chat_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1773126000000,
+      "tag": "0005_telegram_chat_paraphrase_toggle",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1773126900000,
+      "tag": "0006_remove_telegram_chat_mode",
+      "breakpoints": true
     }
   ]
 }

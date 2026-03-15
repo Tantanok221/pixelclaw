@@ -104,7 +104,7 @@ function repairLegacySchema(sqlite: Database.Database) {
     CREATE TABLE IF NOT EXISTS telegram_chats (
       chat_id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL REFERENCES sessions(id),
-      mode TEXT NOT NULL DEFAULT 'work',
+      paraphrase_enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -203,8 +203,12 @@ function repairLegacySchema(sqlite: Database.Database) {
     sqlite.exec("ALTER TABLE telegram_chats ADD COLUMN last_update_id INTEGER");
   }
 
-  if (!telegramChatColumns.some((column) => column.name === "mode")) {
-    sqlite.exec("ALTER TABLE telegram_chats ADD COLUMN mode TEXT NOT NULL DEFAULT 'work'");
+  if (!telegramChatColumns.some((column) => column.name === "paraphrase_enabled")) {
+    sqlite.exec("ALTER TABLE telegram_chats ADD COLUMN paraphrase_enabled INTEGER NOT NULL DEFAULT 1");
+  }
+
+  if (telegramChatColumns.some((column) => column.name === "mode")) {
+    sqlite.exec("ALTER TABLE telegram_chats DROP COLUMN mode");
   }
 
   const runColumns = sqlite.prepare("PRAGMA table_info(runs)").all() as Array<{ name?: string }>;
