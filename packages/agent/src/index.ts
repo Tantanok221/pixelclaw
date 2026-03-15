@@ -9,6 +9,8 @@ export {
   CodexModelProvider,
   codexModelProvider,
   defaultModelProvider,
+  OpenRouterModelProvider,
+  paraphraseModelProvider,
 } from "./ModelProvider.js";
 
 export async function runAgentPrompt(prompt: string): Promise<string> {

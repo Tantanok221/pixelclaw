@@ -26,6 +26,7 @@ describe("model-provider module layout", () => {
 
     expect(module.BaseModelProvider).toBeTypeOf("function");
     expect(module.CodexModelProvider).toBeTypeOf("function");
+    expect(module.OpenRouterModelProvider).toBeTypeOf("function");
     expect(module.defaultModelProvider).toBe(module.codexModelProvider);
   });
 
@@ -54,5 +55,24 @@ describe("resolveAuthFilePath", () => {
     await expect(resolveAuthFilePath(packageDir)).resolves.toBe(
       path.join(homeDir, ".pixelclaw", "system", "auth.json"),
     );
+  });
+});
+
+describe("OpenRouterModelProvider", () => {
+  it("uses the paraphrase model and reads OPENROUTER_API_KEY from the environment", async () => {
+    process.env.OPENROUTER_API_KEY = "openrouter-test-key";
+
+    const { OpenRouterModelProvider } = await import("../src/ModelProvider.js");
+    const provider = new OpenRouterModelProvider("x-ai/grok-4.1-fast");
+
+    expect(provider.providerName).toBe("openrouter");
+    expect(provider.modelName).toBe("x-ai/grok-4.1-fast");
+    expect(provider.apiName).toBe("openai-completions");
+    expect(provider.getModel()).toMatchObject({
+      provider: "openrouter",
+      id: "x-ai/grok-4.1-fast",
+      api: "openai-completions",
+    });
+    await expect(provider.getApiKey()).resolves.toBe("openrouter-test-key");
   });
 });

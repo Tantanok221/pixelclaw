@@ -1,5 +1,6 @@
 export { BaseModelProvider } from "./base.js";
 export { CodexModelProvider, codexModelProvider } from "./codex.js";
+export { OpenRouterModelProvider, paraphraseModelProvider } from "./openrouter.js";
 
 import { codexModelProvider } from "./codex.js";
 

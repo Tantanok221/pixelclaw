@@ -1,7 +1,12 @@
 import { Agent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import { defaultModelProvider, type BaseModelProvider } from "./ModelProvider.js";
+import {
+  defaultModelProvider,
+  paraphraseModelProvider,
+  type BaseModelProvider,
+} from "./ModelProvider.js";
 import type { TodoDocument } from "./todos/store.js";
 import { createAgentTools } from "./tools/index.js";
 import { ensureAgentWorkspaceRoot } from "./workspaceRoot.js";
@@ -29,6 +34,7 @@ export interface RunThreadOptions {
   sessionId?: string;
   cwd?: string;
   modelProvider?: BaseModelProvider;
+  mode?: "work" | "chat";
   onEvent?: (event: AgentRunEvent) => void;
   signal?: AbortSignal;
 }
@@ -49,7 +55,11 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
   const textChunks: string[] = [];
   const workspaceRoot = await ensureAgentWorkspaceRoot();
   const cwd = resolveAgentCwd(options.cwd, workspaceRoot);
-  const modelProvider = options.modelProvider ?? defaultModelProvider;
+  const workModelProvider = options.modelProvider ?? defaultModelProvider;
+  const mode = options.mode ?? "work";
+  const voiceInstructions = await loadWorkspaceVoiceInstructions(cwd);
+  const shouldParaphrase = mode === "work" && Boolean(voiceInstructions);
+  const mainModelProvider = mode === "chat" ? paraphraseModelProvider : workModelProvider;
   let currentState: AgentRunState | undefined;
   const toolArgsByCallId = new Map<string, unknown>();
   const emitState = (state: AgentRunState) => {
@@ -62,18 +72,22 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
   };
   const agent = new Agent({
     initialState: {
-      systemPrompt: buildSystemPrompt(cwd),
-      model: modelProvider.getModel(),
-      tools: createAgentTools(cwd, {
-        sessionId: options.sessionId,
-        onTodoUpdate: (todoDocument) => {
-          options.onEvent?.({ type: "todo.updated", todoDocument });
-        },
-      }),
-      messages: options.messages.map((message) => toAgentMessage(message, modelProvider)),
+      systemPrompt:
+        mode === "chat" ? buildChatModeSystemPrompt(cwd, voiceInstructions) : buildSystemPrompt(cwd),
+      model: mainModelProvider.getModel(),
+      tools:
+        mode === "chat"
+          ? []
+          : createAgentTools(cwd, {
+              sessionId: options.sessionId,
+              onTodoUpdate: (todoDocument) => {
+                options.onEvent?.({ type: "todo.updated", todoDocument });
+              },
+            }),
+      messages: options.messages.map((message) => toAgentMessage(message, mainModelProvider)),
     },
     sessionId: options.sessionId,
-    getApiKey: async () => modelProvider.getApiKey(cwd),
+    getApiKey: async () => mainModelProvider.getApiKey(cwd),
   });
 
   options.onEvent?.({ type: "run.started" });
@@ -126,14 +140,18 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
     if (streamEvent.type === "text_delta") {
       emitState("finalizing");
       textChunks.push(streamEvent.delta);
-      options.onEvent?.({ type: "message.delta", delta: streamEvent.delta });
+      if (!shouldParaphrase) {
+        options.onEvent?.({ type: "message.delta", delta: streamEvent.delta });
+      }
       return;
     }
 
     if (streamEvent.type === "done") {
       emitState("finalizing");
       const text = getAssistantText(streamEvent.message);
-      options.onEvent?.({ type: "message.completed", text });
+      if (!shouldParaphrase) {
+        options.onEvent?.({ type: "message.completed", text });
+      }
       return;
     }
 
@@ -161,7 +179,180 @@ export async function runAgentThread(options: RunThreadOptions): Promise<{ text:
     options.onEvent?.({ type: "run.failed", error: agent.state.error });
   }
 
-  return { text };
+  if (!shouldParaphrase || !voiceInstructions || !text) {
+    return { text };
+  }
+
+  const paraphrasedText = await runParaphrasePass({
+    cwd,
+    sessionId: options.sessionId,
+    inputText: text,
+    systemPrompt: buildParaphraseSystemPrompt(voiceInstructions),
+    signal: options.signal,
+  });
+
+  if (!paraphrasedText) {
+    options.onEvent?.({ type: "message.completed", text });
+    return { text };
+  }
+
+  emitState("finalizing");
+  options.onEvent?.({ type: "message.delta", delta: paraphrasedText });
+  options.onEvent?.({ type: "message.completed", text: paraphrasedText });
+
+  return { text: paraphrasedText };
+}
+
+async function runParaphrasePass(options: {
+  cwd: string;
+  sessionId?: string;
+  inputText: string;
+  systemPrompt: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const textChunks: string[] = [];
+  const paraphraseAgent = new Agent({
+    initialState: {
+      systemPrompt: options.systemPrompt,
+      model: paraphraseModelProvider.getModel(),
+      tools: [],
+      messages: [
+        {
+          role: "user",
+          content: buildParaphraseRequest(options.inputText),
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    sessionId: options.sessionId ? `${options.sessionId}:paraphrase` : undefined,
+    getApiKey: async () => paraphraseModelProvider.getApiKey(options.cwd),
+  });
+
+  const abortAgent = () => {
+    paraphraseAgent.abort();
+  };
+
+  if (options.signal?.aborted) {
+    abortAgent();
+  }
+
+  options.signal?.addEventListener("abort", abortAgent, { once: true });
+
+  const unsubscribe = paraphraseAgent.subscribe((event) => {
+    if (event.type !== "message_update") {
+      return;
+    }
+
+    const streamEvent = event.assistantMessageEvent;
+    if (streamEvent.type === "text_delta") {
+      textChunks.push(streamEvent.delta);
+    }
+  });
+
+  try {
+    await paraphraseAgent.continue();
+  } catch {
+    return "";
+  } finally {
+    options.signal?.removeEventListener("abort", abortAgent);
+    unsubscribe();
+  }
+
+  return resolveAgentOutput(paraphraseAgent.state.messages, textChunks.join(""), paraphraseAgent.state.error);
+}
+
+async function loadWorkspaceVoiceInstructions(
+  cwd: string,
+): Promise<{ identity: string; souls: string } | null> {
+  const workspaceRoot = await resolveParaphraseWorkspaceRoot(cwd);
+  const [identity, souls] = await Promise.all([
+    readOptionalFile(path.join(workspaceRoot, "identity.md")),
+    readOptionalFile(path.join(workspaceRoot, "souls.md")),
+  ]);
+
+  if (!identity && !souls) {
+    return null;
+  }
+
+  return { identity, souls };
+}
+
+async function resolveParaphraseWorkspaceRoot(startDir: string): Promise<string> {
+  let currentDir = path.resolve(startDir);
+
+  while (true) {
+    const [hasIdentity, hasSouls] = await Promise.all([
+      pathExists(path.join(currentDir, "identity.md")),
+      pathExists(path.join(currentDir, "souls.md")),
+    ]);
+
+    if (hasIdentity || hasSouls) {
+      return currentDir;
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      return path.resolve(startDir);
+    }
+
+    currentDir = parentDir;
+  }
+}
+
+function buildParaphraseSystemPrompt(options: { identity: string; souls: string }) {
+  return [
+    "You are Pixel's paraphrase layer.",
+    "Rewrite the final assistant reply using the voice and vibe defined below.",
+    "Preserve the original meaning, facts, instructions, and safety constraints.",
+    "Do not add new claims or omit important details.",
+    "Keep markdown structure, code blocks, commands, file paths, URLs, and structured data intact unless a surrounding sentence can be safely reworded.",
+    "Return only the rewritten assistant reply.",
+    options.identity ? `Identity:\n${options.identity}` : "",
+    options.souls ? `Souls:\n${options.souls}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function buildChatModeSystemPrompt(
+  cwd: string,
+  voiceInstructions: { identity: string; souls: string } | null,
+) {
+  return [
+    "You are Pixel in chat mode.",
+    "Reply directly to the user in a natural conversational style.",
+    "No tools are available in this mode.",
+    `Your current working directory is ${cwd}.`,
+    voiceInstructions?.identity ? `Identity:\n${voiceInstructions.identity}` : "",
+    voiceInstructions?.souls ? `Souls:\n${voiceInstructions.souls}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function buildParaphraseRequest(text: string) {
+  return [
+    "Rewrite the assistant reply below with the configured voice while keeping the exact intent and practical content.",
+    "Assistant reply:",
+    text,
+  ].join("\n\n");
+}
+
+async function readOptionalFile(filePath: string): Promise<string> {
+  try {
+    return (await readFile(filePath, "utf-8")).trim();
+  } catch {
+    return "";
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function resolveAgentCwd(cwd: string | undefined, workspaceRoot: string): string {
