@@ -16,6 +16,11 @@ export interface TelegramApiResult<T> {
   description?: string;
 }
 
+export interface TelegramBotCommand {
+  command: string;
+  description: string;
+}
+
 export interface TelegramTransport {
   sendMessage(chatId: string, text: string): Promise<{ messageId: number }>;
   editMessageText(chatId: string, messageId: number, text: string): Promise<void>;
@@ -23,6 +28,7 @@ export interface TelegramTransport {
 }
 
 export interface TelegramPollingTransport extends TelegramTransport {
+  setMyCommands?(commands: TelegramBotCommand[]): Promise<void>;
   getUpdates(
     offset: number,
     timeoutSeconds: number,

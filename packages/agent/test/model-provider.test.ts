@@ -63,14 +63,14 @@ describe("OpenRouterModelProvider", () => {
     process.env.OPENROUTER_API_KEY = "openrouter-test-key";
 
     const { OpenRouterModelProvider } = await import("../src/ModelProvider.js");
-    const provider = new OpenRouterModelProvider("x-ai/grok-4.1-fast");
+    const provider = new OpenRouterModelProvider("deepseek/deepseek-v3.2");
 
     expect(provider.providerName).toBe("openrouter");
-    expect(provider.modelName).toBe("x-ai/grok-4.1-fast");
+    expect(provider.modelName).toBe("deepseek/deepseek-v3.2");
     expect(provider.apiName).toBe("openai-completions");
     expect(provider.getModel()).toMatchObject({
       provider: "openrouter",
-      id: "x-ai/grok-4.1-fast",
+      id: "deepseek/deepseek-v3.2",
       api: "openai-completions",
     });
     await expect(provider.getApiKey()).resolves.toBe("openrouter-test-key");

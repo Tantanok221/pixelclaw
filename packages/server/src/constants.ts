@@ -21,6 +21,25 @@ export const TELEGRAM_COMMANDS = {
   toggle: "/toggle",
 } as const;
 
+export const TELEGRAM_BOT_COMMANDS = [
+  {
+    command: "new",
+    description: "Start a new chat",
+  },
+  {
+    command: "toggle",
+    description: "Toggle paraphrase",
+  },
+  {
+    command: "help",
+    description: "Show available commands",
+  },
+  {
+    command: "stop",
+    description: "Stop the current activity",
+  },
+] as const;
+
 export const TELEGRAM_MESSAGES = {
   help: [
     "Available commands:",

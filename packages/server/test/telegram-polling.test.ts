@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TELEGRAM_BOT_COMMANDS } from "../src/constants.js";
 import { createDatabase } from "../src/database.js";
 import type { RunAgentOptions } from "../src/defaultAgentRunner.js";
 import { ChatRepository } from "../src/repository.js";
@@ -49,6 +50,7 @@ describe("Telegram polling and coordination", () => {
     });
 
     await waitFor(async () => {
+      expect(telegram.registeredCommands).toEqual([[...TELEGRAM_BOT_COMMANDS]]);
       const mapping = await repository.getTelegramChatSession("99");
       expect(mapping).toBeTruthy();
       expect(telegram.sentMessages.at(-1)).toEqual({

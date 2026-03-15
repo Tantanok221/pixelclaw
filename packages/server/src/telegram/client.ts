@@ -1,5 +1,10 @@
 import { loadTelegramConfig } from "../telegramConfig.js";
-import type { TelegramApiResult, TelegramPollingTransport, TelegramUpdate } from "./types.js";
+import type {
+  TelegramApiResult,
+  TelegramBotCommand,
+  TelegramPollingTransport,
+  TelegramUpdate,
+} from "./types.js";
 
 export async function createConfiguredTelegramClient(): Promise<TelegramPollingTransport | null> {
   const config = await loadTelegramConfig();
@@ -14,6 +19,11 @@ export function createTelegramClient(botToken: string): TelegramPollingTransport
   const baseUrl = `https://api.telegram.org/bot${botToken}`;
 
   return {
+    async setMyCommands(commands: TelegramBotCommand[]) {
+      await postTelegram(`${baseUrl}/setMyCommands`, {
+        commands,
+      });
+    },
     async getUpdates(offset, timeoutSeconds, signal) {
       const response = await postTelegram<
         TelegramApiResult<

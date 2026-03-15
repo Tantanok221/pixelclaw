@@ -13,4 +13,4 @@ export class OpenRouterModelProvider extends BaseModelProvider {
   }
 }
 
-export const paraphraseModelProvider = new OpenRouterModelProvider("x-ai/grok-4.1-fast");
+export const paraphraseModelProvider = new OpenRouterModelProvider("deepseek/deepseek-v3.2");

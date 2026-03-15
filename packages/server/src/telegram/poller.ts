@@ -1,4 +1,5 @@
 import {
+  TELEGRAM_BOT_COMMANDS,
   TELEGRAM_POLL_TIMEOUT_SECONDS,
   TELEGRAM_RETRY_DELAY_MS,
 } from "../constants.js";
@@ -13,6 +14,8 @@ export async function startTelegramBot(
   if (!telegram) {
     return null;
   }
+
+  await telegram.setMyCommands?.([...TELEGRAM_BOT_COMMANDS]);
 
   const pollTimeoutSeconds = options.pollTimeoutSeconds ?? TELEGRAM_POLL_TIMEOUT_SECONDS;
   const retryDelayMs = options.retryDelayMs ?? TELEGRAM_RETRY_DELAY_MS;

@@ -268,7 +268,7 @@ describe("runAgentThread", () => {
     ]);
     expect(paraphraseModel).toMatchObject({
       provider: "openrouter",
-      id: "x-ai/grok-4.1-fast",
+      id: "deepseek/deepseek-v3.2",
       api: "openai-completions",
     });
     expect(consoleLogSpy).toHaveBeenNthCalledWith(1, "[work:main] Base answer");

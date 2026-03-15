@@ -15,13 +15,20 @@ interface DeletedMessage {
   messageId: number;
 }
 
+interface RegisteredCommand {
+  command: string;
+  description: string;
+}
+
 export interface TelegramTestTransport {
   sentMessages: SentMessage[];
   editedMessages: EditedMessage[];
   deletedMessages: DeletedMessage[];
+  registeredCommands: RegisteredCommand[][];
   sendMessage(chatId: string, text: string): Promise<{ messageId: number }>;
   editMessageText(chatId: string, messageId: number, text: string): Promise<void>;
   deleteMessage(chatId: string, messageId: number): Promise<void>;
+  setMyCommands(commands: RegisteredCommand[]): Promise<void>;
 }
 
 export async function waitFor(assertion: () => void | Promise<void>, timeoutMs = 1000) {
@@ -43,12 +50,14 @@ export function createTelegramTransport(): TelegramTestTransport {
   const sentMessages: SentMessage[] = [];
   const editedMessages: EditedMessage[] = [];
   const deletedMessages: DeletedMessage[] = [];
+  const registeredCommands: RegisteredCommand[][] = [];
   let nextMessageId = 1;
 
   return {
     sentMessages,
     editedMessages,
     deletedMessages,
+    registeredCommands,
     async sendMessage(chatId: string, text: string) {
       const message = {
         chatId,
@@ -63,6 +72,9 @@ export function createTelegramTransport(): TelegramTestTransport {
     },
     async deleteMessage(chatId: string, messageId: number) {
       deletedMessages.push({ chatId, messageId });
+    },
+    async setMyCommands(commands: RegisteredCommand[]) {
+      registeredCommands.push(commands);
     },
   };
 }
