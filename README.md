@@ -15,6 +15,24 @@ cp .env.example .env
 
 The web app talks to the Fastify backend in `packages/server`, and the backend invokes the agent runtime in `packages/agent`.
 
+## GitHub PR Monitor
+
+GitHub monitor support is optional and uses the locally authenticated GitHub CLI instead of a custom OAuth app.
+
+Before opening the monitor dashboard, authenticate the machine with:
+
+```bash
+gh auth login --web --scopes read:org,repo
+```
+
+Then sync accounts from the dashboard, or call:
+
+```text
+POST /api/monitor/github/accounts/sync
+```
+
+After syncing an account, create a monitor for a repository. The server polls for authored PR changes and pushes unread notifications to the browser over SSE.
+
 ## Telegram Bot
 
 Telegram support is optional and is enabled when Pixelclaw can read a bot token from:
@@ -75,6 +93,8 @@ npm run format
 npm run format:check
 npm run osfmt
 ```
+
+`npm run dev:server` now runs the backend in watch mode, so changes under `packages/server/src` restart the Fastify process automatically.
 
 ## Workspace Layout
 

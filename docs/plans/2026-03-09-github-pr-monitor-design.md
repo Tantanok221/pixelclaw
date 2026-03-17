@@ -45,6 +45,7 @@ Core runtime pieces:
 5. Notification surface
    - Exposes unread monitor notifications to `packages/web`.
    - Powers status bar items and a simple inbox view.
+   - Streams new notifications to the browser over SSE.
 
 This should follow the same operational pattern as the existing Telegram poller: a single in-process loop with clean shutdown handling.
 
@@ -175,9 +176,38 @@ Suggested endpoints:
 - `POST /api/monitors`
 - `PATCH /api/monitors/:monitorId`
 - `GET /api/notifications`
+- `GET /api/notifications/stream`
 - `POST /api/notifications/:notificationId/read`
 
 V1 can keep these endpoints local-only and session-light if the whole app is effectively a single-user desktop or local server setup.
+
+## Live Updates
+
+GitHub remains poll-based. Browser delivery should be live.
+
+Recommended split:
+
+- `server -> GitHub`: background polling
+- `server -> browser`: SSE
+
+V1 SSE rules:
+
+- the web app loads notification history with `GET /api/notifications`
+- the web app opens a single SSE connection to `GET /api/notifications/stream`
+- the SSE stream emits only `notification.created`
+- each SSE payload contains enough data to render without an immediate refetch
+
+Suggested `notification.created` payload:
+
+- `notificationId`
+- `monitorId`
+- `eventType`
+- `title`
+- `repo`
+- `prNumber`
+- `createdAt`
+
+The polling coordinator should not write directly to open HTTP responses. Notification creation should write to SQLite first, then publish an in-process event through a small notification broadcaster that the SSE route subscribes to.
 
 ## Web UX
 
@@ -235,8 +265,9 @@ Web tests:
 2. Add GitHub OAuth flow and account management endpoints.
 3. Add the polling coordinator with deterministic snapshot diffing.
 4. Add notification endpoints and status bar rendering in `web`.
-5. Add monitor creation and management UI.
-6. Add placeholder agent action affordances without implementing the actions yet.
+5. Add SSE notification streaming to the server and `web`.
+6. Add monitor creation and management UI.
+7. Add placeholder agent action affordances without implementing the actions yet.
 
 ## Implementation Breakdown
 
@@ -259,6 +290,7 @@ Phase 3: web product surface
 - GitHub connection flow
 - monitor creation UI
 - notifications in status bar
+- SSE client for live `notification.created` updates
 - monitor management list
 
 Phase 4: hardening
