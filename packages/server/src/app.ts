@@ -5,6 +5,14 @@ import { compactionEngine, type CompactionEngine } from "./compactionEngine.js";
 import { SESSION_COOKIE } from "./constants.js";
 import { createDatabase } from "./database.js";
 import { runDefaultAgentTurn, type RunAgentOptions, type ServerAgentMessage } from "./defaultAgentRunner.js";
+import {
+  createGithubCredentialSource,
+  type GithubCredentialAccount,
+  type GithubCredentialSource,
+} from "./githubCredentialSource.js";
+import { createGithubClient, type GithubClient } from "./githubClient.js";
+import { startGithubMonitorPoller } from "./githubMonitorPoller.js";
+import { createNotificationBroadcaster, type NotificationBroadcaster } from "./notifications.js";
 import { ChatRepository } from "./repository.js";
 import { startTelegramBot } from "./telegramBot.js";
 
@@ -17,23 +25,40 @@ export interface BuildServerOptions {
     agentRunner: (options: RunAgentOptions) => Promise<{ text: string }>;
     compactionEngine: CompactionEngine;
   }) => Promise<{ close: () => Promise<void> } | null>;
+  notificationBroadcaster?: NotificationBroadcaster;
+  githubClient?: GithubClient;
+  githubCredentialSource?: GithubCredentialSource;
+  githubMonitorPollerStarter?: (options: {
+    repository: ChatRepository;
+    githubClient: GithubClient;
+    githubCredentialSource: GithubCredentialSource;
+  }) => Promise<{ close: () => Promise<void> } | null>;
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify();
   const database = createDatabase(options.databasePath);
-  const repository = new ChatRepository(database.daos);
+  const notificationBroadcaster = options.notificationBroadcaster ?? createNotificationBroadcaster();
+  const repository = new ChatRepository(database.daos, notificationBroadcaster);
   const agentRunner = options.agentRunner ?? runDefaultAgentTurn;
+  const githubClient = options.githubClient ?? createGithubClient();
+  const githubCredentialSource = options.githubCredentialSource ?? createGithubCredentialSource();
   const resolvedCompactionEngine = options.compactionEngine ?? compactionEngine;
   const telegramBot = await (options.telegramBotStarter ?? startTelegramBot)({
     repository,
     agentRunner,
     compactionEngine: resolvedCompactionEngine,
   });
+  const githubMonitorPoller = await (options.githubMonitorPollerStarter ?? startGithubMonitorPoller)({
+    repository,
+    githubClient,
+    githubCredentialSource,
+  });
 
   await app.register(cookie);
 
   app.addHook("onClose", async () => {
+    await githubMonitorPoller?.close();
     await telegramBot?.close();
     database.sqlite.close();
   });
@@ -408,8 +433,196 @@ export async function buildServer(options: BuildServerOptions = {}) {
     };
   });
 
+  app.get("/api/notifications", async () => ({
+    notifications: await repository.listMonitorNotifications(),
+  }));
+
+  app.get("/api/monitor/github/accounts", async () => ({
+    accounts: await repository.listGithubAccounts(),
+  }));
+
+  app.get("/api/monitor/github/accounts/:accountId/repositories", async (request, reply) => {
+    const params = request.params as { accountId: string };
+    const repositories = await listGithubRepositories({
+      accountId: params.accountId,
+      repository,
+      githubClient,
+      githubCredentialSource,
+    }).catch((error: unknown) => {
+      if (error instanceof MissingGithubAccountError) {
+        return null;
+      }
+
+      throw error;
+    });
+
+    if (!repositories) {
+      reply.code(404);
+      return { error: "GitHub account not found" };
+    }
+
+    return { repositories };
+  });
+
+  app.post("/api/monitor/github/accounts/sync", async (_request, reply) => {
+    try {
+      const accounts = await syncGithubAccounts({
+        repository,
+        githubClient,
+        githubCredentialSource,
+      });
+
+      return { accounts };
+    } catch (error) {
+      reply.code(503);
+      return {
+        error: error instanceof Error ? error.message : "Unable to sync GitHub CLI accounts",
+      };
+    }
+  });
+
+  app.get("/api/monitors", async () => ({
+    monitors: await repository.listMonitors(),
+  }));
+
+  app.post("/api/monitors", async (request, reply) => {
+    const body = request.body as {
+      githubAccountId?: string;
+      repository?: string;
+    };
+
+    const githubAccountId = body.githubAccountId?.trim();
+    const repositoryName = body.repository?.trim();
+
+    if (!githubAccountId || !repositoryName) {
+      reply.code(400);
+      return { error: "githubAccountId and repository are required" };
+    }
+
+    const parsedRepository = parseRepositoryFullName(repositoryName);
+    if (!parsedRepository) {
+      reply.code(400);
+      return { error: "repository must be in owner/repo format" };
+    }
+
+    const monitor = await repository.createMonitor({
+      githubAccountId,
+      owner: parsedRepository.owner,
+      repo: parsedRepository.repo,
+      name: `${parsedRepository.repo} PRs`,
+    });
+
+    if (!monitor) {
+      reply.code(404);
+      return { error: "GitHub account not found" };
+    }
+
+    reply.code(201);
+    return { monitor };
+  });
+
+  app.get("/api/notifications/stream", async (_request, reply) => {
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+    reply.raw.flushHeaders?.();
+
+    const writeEvent = (event: string, data: unknown) => {
+      reply.raw.write(`event: ${event}\n`);
+      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const unsubscribe = notificationBroadcaster.subscribe((notification) => {
+      writeEvent("notification.created", notification);
+    });
+    const heartbeat = setInterval(() => {
+      reply.raw.write(": keep-alive\n\n");
+    }, 15000);
+    heartbeat.unref?.();
+
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+
+    reply.raw.on("close", cleanup);
+    reply.raw.on("error", cleanup);
+  });
+
   return app;
 }
+
+async function syncGithubAccounts(options: {
+  repository: ChatRepository;
+  githubClient: GithubClient;
+  githubCredentialSource: GithubCredentialSource;
+}) {
+  const knownAccounts = await options.githubCredentialSource.listAccounts();
+  const syncedAccounts = await Promise.all(
+    knownAccounts.map(async (account) => syncGithubAccount(options, account)),
+  );
+
+  return syncedAccounts;
+}
+
+async function syncGithubAccount(
+  options: {
+    repository: ChatRepository;
+    githubClient: GithubClient;
+    githubCredentialSource: GithubCredentialSource;
+  },
+  account: GithubCredentialAccount,
+) {
+  const accessToken = await options.githubCredentialSource.getAccessToken({
+    hostname: account.hostname,
+    login: account.login,
+  });
+  const viewer = await options.githubClient.getViewer(accessToken);
+
+  return options.repository.createGithubAccount({
+    providerUserId: String(viewer.id),
+    hostname: account.hostname,
+    login: viewer.login,
+    displayName: viewer.name,
+    avatarUrl: viewer.avatarUrl,
+    scopes: account.scopes,
+    tokenSource: account.tokenSource,
+  });
+}
+
+async function listGithubRepositories(options: {
+  accountId: string;
+  repository: ChatRepository;
+  githubClient: GithubClient;
+  githubCredentialSource: GithubCredentialSource;
+}) {
+  const account = await options.repository.getGithubAccount(options.accountId);
+  if (!account) {
+    throw new MissingGithubAccountError();
+  }
+
+  const accessToken = await options.githubCredentialSource.getAccessToken({
+    hostname: account.hostname,
+    login: account.login,
+  });
+  const repositories = await options.githubClient.listRepositories(accessToken);
+
+  return repositories.sort((left, right) => left.fullName.localeCompare(right.fullName));
+}
+
+function parseRepositoryFullName(value: string) {
+  const [owner, repo, ...rest] = value.split("/").map((part) => part.trim());
+  if (!owner || !repo || rest.length > 0) {
+    return null;
+  }
+
+  return { owner, repo };
+}
+
+class MissingGithubAccountError extends Error {}
 
 async function ensureSession(
   request: { cookies: Record<string, string | undefined> },

@@ -128,11 +128,13 @@ export const monitorNotifications = sqliteTable("monitor_notifications", {
 export const githubAccounts = sqliteTable("github_accounts", {
   id: text("id").primaryKey(),
   providerUserId: text("provider_user_id").notNull(),
+  hostname: text("hostname").notNull(),
   login: text("login").notNull(),
   displayName: text("display_name"),
   avatarUrl: text("avatar_url"),
   accessToken: text("access_token").notNull(),
   scopes: text("scopes").notNull(),
+  tokenSource: text("token_source").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

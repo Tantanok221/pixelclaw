@@ -478,22 +478,28 @@ export class ChatRepository {
 
   async createGithubAccount(input: {
     providerUserId: string;
+    hostname: string;
     login: string;
     displayName?: string | null;
     avatarUrl?: string | null;
-    accessToken: string;
     scopes: string[];
+    tokenSource: string;
   }) {
     const now = nowIso();
-    const existing = await this.daos.githubAccounts.findByProviderUserId(input.providerUserId);
+    const existing =
+      (await this.daos.githubAccounts.findByProviderUserId(input.providerUserId)) ??
+      (await this.daos.githubAccounts.findByHostnameAndLogin(input.hostname, input.login));
 
     if (existing) {
       await this.daos.githubAccounts.updateById(existing.id, {
+        providerUserId: input.providerUserId,
+        hostname: input.hostname,
         login: input.login,
         displayName: input.displayName ?? null,
         avatarUrl: input.avatarUrl ?? null,
-        accessToken: input.accessToken,
+        accessToken: "",
         scopes: serializePayload(input.scopes),
+        tokenSource: input.tokenSource,
         updatedAt: now,
       });
       return this.getRequiredGithubAccount(existing.id);
@@ -503,11 +509,13 @@ export class ChatRepository {
     await this.daos.githubAccounts.insert({
       id,
       providerUserId: input.providerUserId,
+      hostname: input.hostname,
       login: input.login,
       displayName: input.displayName ?? null,
       avatarUrl: input.avatarUrl ?? null,
-      accessToken: input.accessToken,
+      accessToken: "",
       scopes: serializePayload(input.scopes),
+      tokenSource: input.tokenSource,
       createdAt: now,
       updatedAt: now,
     });
@@ -809,8 +817,16 @@ function parseMonitorNotificationRecord(record: MonitorNotificationRecord) {
 function parseGithubAccountRecord(record: GithubAccountRow) {
   const parsedScopes = parsePayload(record.scopes);
   return {
-    ...record,
+    id: record.id,
+    providerUserId: record.providerUserId,
+    hostname: record.hostname,
+    login: record.login,
+    displayName: record.displayName,
+    avatarUrl: record.avatarUrl,
     scopes: Array.isArray(parsedScopes) ? (parsedScopes as string[]) : [],
+    tokenSource: record.tokenSource,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
   };
 }
 

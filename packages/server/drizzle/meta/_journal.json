@@ -50,6 +50,13 @@
       "when": 1773126900000,
       "tag": "0006_remove_telegram_chat_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1773165000000,
+      "tag": "0007_github_cli_accounts",
+      "breakpoints": true
     }
   ]
 }

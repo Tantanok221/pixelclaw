@@ -152,11 +152,13 @@ function repairLegacySchema(sqlite: Database.Database) {
     CREATE TABLE IF NOT EXISTS github_accounts (
       id TEXT PRIMARY KEY,
       provider_user_id TEXT NOT NULL,
+      hostname TEXT NOT NULL DEFAULT 'github.com',
       login TEXT NOT NULL,
       display_name TEXT,
       avatar_url TEXT,
       access_token TEXT NOT NULL,
       scopes TEXT NOT NULL,
+      token_source TEXT NOT NULL DEFAULT 'gh-cli',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -216,6 +218,18 @@ function repairLegacySchema(sqlite: Database.Database) {
   if (!runColumns.some((column) => column.name === "source")) {
     sqlite.exec("ALTER TABLE runs ADD COLUMN source TEXT NOT NULL DEFAULT 'web'");
   }
+
+  const githubAccountColumns = sqlite.prepare("PRAGMA table_info(github_accounts)").all() as Array<{ name?: string }>;
+
+  if (!githubAccountColumns.some((column) => column.name === "hostname")) {
+    sqlite.exec("ALTER TABLE github_accounts ADD COLUMN hostname TEXT NOT NULL DEFAULT 'github.com'");
+  }
+
+  if (!githubAccountColumns.some((column) => column.name === "token_source")) {
+    sqlite.exec("ALTER TABLE github_accounts ADD COLUMN token_source TEXT NOT NULL DEFAULT 'gh-cli'");
+  }
+
+  sqlite.exec("UPDATE github_accounts SET access_token = '' WHERE access_token <> ''");
 }
 
 function stampMigrationBaseline(sqlite: Database.Database) {
