@@ -4,6 +4,7 @@ import { ActiveSessionsHome } from "./components/monitor/active-sessions-home.js
 import { DashboardSidebar } from "./components/monitor/dashboard-sidebar.js";
 import { InspectorHeader } from "./components/monitor/inspector-header.js";
 import { InspectorStateCard } from "./components/monitor/inspector-state-card.js";
+import { NotificationBar } from "./components/monitor/notification-bar.js";
 import { RunInspector } from "./components/monitor/run-inspector.js";
 import { Card } from "./components/ui/card.js";
 import type { AdminRunSummary } from "./lib/monitor-client.js";
@@ -44,6 +45,7 @@ function MonitorLayout() {
   const {
     error,
     isRefreshing,
+    notifications,
     overview,
     refreshDashboard,
     runs,
@@ -81,6 +83,7 @@ function MonitorLayout() {
 
           <main className="flex min-h-screen flex-col">
             <InspectorHeader selectedRun={selectedRun} selectedSummary={selectedSummary} />
+            <NotificationBar notifications={notifications} />
 
             <div className="flex-1 bg-background px-6 py-6 lg:px-8">
               {error ? (
@@ -119,12 +122,17 @@ function OverviewRoute() {
   }
 
   return (
-    <ActiveSessionsHome
-      overview={dashboard.overview}
-      runs={dashboard.runs}
-      onOpenRun={(threadId) => {
-        void navigate({
-          to: "/chats/$threadId",
+      <ActiveSessionsHome
+        githubAccounts={dashboard.githubAccounts}
+        monitors={dashboard.monitors}
+        overview={dashboard.overview}
+        runs={dashboard.runs}
+        onCreateMonitor={dashboard.createMonitor}
+        onListGithubRepositories={dashboard.listGithubRepositories}
+        onSyncGithubAccounts={dashboard.syncGithubAccounts}
+        onOpenRun={(threadId) => {
+          void navigate({
+            to: "/chats/$threadId",
           params: { threadId },
         });
       }}

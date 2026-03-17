@@ -1,20 +1,44 @@
 import { ArrowUpRight, Activity, Clock3, Layers3 } from "lucide-react";
 import { Button } from "../ui/button.js";
 import { Card } from "../ui/card.js";
-import type { AdminRunSummary, OverviewResponse } from "../../lib/monitor-client.js";
+import type {
+  AdminRunSummary,
+  GithubAccount,
+  GithubRepositorySummary,
+  MonitorSummary,
+  OverviewResponse,
+} from "../../lib/monitor-client.js";
 import { groupActiveRunsBySession } from "../../helpers/monitor-groups.js";
 import { formatTime } from "../../helpers/monitor-format.js";
 import { statusDotClassName } from "../../helpers/monitor-style.js";
 import { cn } from "../../lib/utils.js";
+import { MonitorConfigurationPanel } from "./monitor-configuration-panel.js";
 import { OverviewMetrics } from "./overview-metrics.js";
 
 interface ActiveSessionsHomeProps {
+  githubAccounts: GithubAccount[];
+  monitors: MonitorSummary[];
   overview: OverviewResponse | null;
   runs: AdminRunSummary[];
+  onCreateMonitor: (input: {
+    githubAccountId: string;
+    repository: string;
+  }) => Promise<unknown>;
+  onListGithubRepositories: (githubAccountId: string) => Promise<GithubRepositorySummary[]>;
+  onSyncGithubAccounts: () => Promise<unknown>;
   onOpenRun: (threadId: string) => void;
 }
 
-export function ActiveSessionsHome({ overview, runs, onOpenRun }: ActiveSessionsHomeProps) {
+export function ActiveSessionsHome({
+  githubAccounts,
+  monitors,
+  overview,
+  runs,
+  onCreateMonitor,
+  onListGithubRepositories,
+  onSyncGithubAccounts,
+  onOpenRun,
+}: ActiveSessionsHomeProps) {
   const sessionGroups = groupActiveRunsBySession(runs);
 
   return (
@@ -35,6 +59,14 @@ export function ActiveSessionsHome({ overview, runs, onOpenRun }: ActiveSessions
       </div>
 
       <OverviewMetrics overview={overview} />
+
+      <MonitorConfigurationPanel
+        githubAccounts={githubAccounts}
+        monitors={monitors}
+        onCreateMonitor={onCreateMonitor}
+        onListGithubRepositories={onListGithubRepositories}
+        onSyncGithubAccounts={onSyncGithubAccounts}
+      />
 
       {!sessionGroups.length ? (
         <Card className="rounded-3xl border border-border bg-card shadow-none">

@@ -1,9 +1,77 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "../src/App.js";
+import type {
+  GithubRepositorySummary,
+  MonitorNotification,
+  MonitorSummary,
+} from "../src/lib/monitor-client.js";
 
 class FakeMonitorClient {
+  private readonly githubAccounts = [
+    {
+      id: "account-1",
+      providerUserId: "12345",
+      hostname: "github.com",
+      login: "tantanok",
+      displayName: "Tan Tanok",
+      avatarUrl: "https://avatars.example/tantanok.png",
+      scopes: ["repo", "read:user"],
+      tokenSource: "keyring",
+      createdAt: "2026-03-09T10:00:00.000Z",
+      updatedAt: "2026-03-09T10:00:00.000Z",
+    },
+  ];
+  private readonly monitors: MonitorSummary[] = [
+    {
+      id: "monitor-1",
+      provider: "github",
+      githubAccountId: "account-1",
+      owner: "pixelclaw",
+      repo: "web",
+      name: "My web PRs",
+      status: "active",
+      pollIntervalSeconds: 45,
+      nextPollAt: "2026-03-09T10:31:00.000Z",
+      lastPolledAt: "2026-03-09T10:30:30.000Z",
+      lastError: null,
+      createdAt: "2026-03-09T10:05:00.000Z",
+      updatedAt: "2026-03-09T10:30:30.000Z",
+      unreadCount: 1,
+    },
+  ];
+  private readonly notifications: MonitorNotification[] = [
+    {
+      id: "notification-1",
+      eventId: "event-1",
+      monitorId: "monitor-1",
+      provider: "github",
+      eventType: "checks.failed",
+      title: "pixelclaw/web: checks failed on PR #42",
+      payload: { prNumber: 42, repo: "pixelclaw/web" },
+      sourceKey: "github:pixelclaw/web:pr-42:checks_failed:sha-1",
+      status: "unread",
+      createdAt: "2026-03-09T10:32:00.000Z",
+      readAt: null,
+    },
+  ];
+  private readonly githubRepositoriesByAccountId: Record<string, GithubRepositorySummary[]> = {
+    "account-1": [
+      {
+        owner: "pixelclaw",
+        name: "server",
+        fullName: "pixelclaw/server",
+      },
+      {
+        owner: "pixelclaw",
+        name: "web",
+        fullName: "pixelclaw/web",
+      },
+    ],
+  };
+  private readonly notificationListeners = new Set<(notification: MonitorNotification) => void>();
+
   async getOverview() {
     return {
       counts: {
@@ -178,6 +246,65 @@ class FakeMonitorClient {
     };
   }
 
+  async getNotifications() {
+    return this.notifications;
+  }
+
+  async getGithubAccounts() {
+    return this.githubAccounts;
+  }
+
+  async syncGithubAccounts() {
+    return this.githubAccounts;
+  }
+
+  async getMonitors() {
+    return this.monitors;
+  }
+
+  async getGithubRepositories(githubAccountId: string) {
+    return this.githubRepositoriesByAccountId[githubAccountId] ?? [];
+  }
+
+  async createMonitor(input: {
+    githubAccountId: string;
+    repository: string;
+  }) {
+    const [owner, repo] = input.repository.split("/");
+    const monitor = {
+      id: `monitor-${this.monitors.length + 1}`,
+      provider: "github",
+      githubAccountId: input.githubAccountId,
+      owner,
+      repo,
+      name: `${repo} PRs`,
+      status: "active",
+      pollIntervalSeconds: 45,
+      nextPollAt: "2026-03-09T10:40:00.000Z",
+      lastPolledAt: null,
+      lastError: null,
+      createdAt: "2026-03-09T10:35:00.000Z",
+      updatedAt: "2026-03-09T10:35:00.000Z",
+      unreadCount: 0,
+    };
+    this.monitors.unshift(monitor);
+    return monitor;
+  }
+
+  subscribeToNotifications(onNotification: (notification: MonitorNotification) => void) {
+    this.notificationListeners.add(onNotification);
+    return () => {
+      this.notificationListeners.delete(onNotification);
+    };
+  }
+
+  emitNotification(notification: MonitorNotification) {
+    this.notifications.unshift(notification);
+    for (const listener of this.notificationListeners) {
+      listener(notification);
+    }
+  }
+
   async listThreads() {
     return [];
   }
@@ -318,5 +445,59 @@ describe("admin monitor dashboard", () => {
 
     expect(within(sidebar).getByRole("button", { name: /run 11/i })).toBeInTheDocument();
     expect(within(sidebar).getByRole("button", { name: /run 12/i })).toBeInTheDocument();
+  });
+
+  it("renders monitor notifications and appends new ones from the live stream", async () => {
+    const client = new FakeMonitorClient();
+    render(<App client={client as never} />);
+
+    expect(await screen.findByText("pixelclaw/web: checks failed on PR #42")).toBeInTheDocument();
+    expect(await screen.findByText("1 unread alert")).toBeInTheDocument();
+
+    await act(async () => {
+      client.emitNotification({
+        id: "notification-2",
+        eventId: "event-2",
+        monitorId: "monitor-1",
+        provider: "github",
+        eventType: "comment.created",
+        title: "pixelclaw/web: new comment on PR #42",
+        payload: { prNumber: 42, repo: "pixelclaw/web" },
+        sourceKey: "github:pixelclaw/web:pr-42:comment_created:comment-8",
+        status: "unread",
+        createdAt: "2026-03-09T10:33:00.000Z",
+        readAt: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("pixelclaw/web: new comment on PR #42")).toBeInTheDocument();
+      expect(screen.getByText("2 unread alerts")).toBeInTheDocument();
+    });
+  });
+
+  it("renders connected GitHub accounts and lets the user create a monitor", async () => {
+    const user = userEvent.setup();
+    const client = new FakeMonitorClient();
+    render(<App client={client as never} />);
+
+    expect(await screen.findByText("Connected accounts")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /sync gh accounts/i })).toBeInTheDocument();
+    expect((await screen.findAllByText("@tantanok")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("My web PRs")).toBeInTheDocument();
+    expect(await screen.findByText("1 unread")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("GitHub account"), "account-1");
+
+    expect(screen.queryByLabelText("Repository owner")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Monitor name")).not.toBeInTheDocument();
+
+    await user.selectOptions(await screen.findByLabelText("Repository"), "pixelclaw/server");
+    await user.click(screen.getByRole("button", { name: /create monitor/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("server PRs")).toBeInTheDocument();
+      expect(screen.getAllByText("pixelclaw/server").length).toBeGreaterThan(0);
+    });
   });
 });

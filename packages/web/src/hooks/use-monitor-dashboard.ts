@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type {
   AdminRunDetail,
   AdminRunEvent,
   AdminRunSummary,
+  GithubAccount,
+  MonitorSummary,
+  MonitorNotification,
   MonitorClient,
   OverviewResponse,
 } from "../lib/monitor-client.js";
@@ -14,6 +17,9 @@ export function useMonitorDashboard(client: MonitorClient) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<AdminRunDetail | null>(null);
   const [selectedEvents, setSelectedEvents] = useState<AdminRunEvent[]>([]);
+  const [githubAccounts, setGithubAccounts] = useState<GithubAccount[]>([]);
+  const [monitors, setMonitors] = useState<MonitorSummary[]>([]);
+  const [notifications, setNotifications] = useState<MonitorNotification[]>([]);
   const [selectedTab, setSelectedTab] = useState<InspectorTab>("timeline");
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -24,7 +30,13 @@ export function useMonitorDashboard(client: MonitorClient) {
 
     const bootstrap = async () => {
       try {
-        const [nextOverview, nextRuns] = await Promise.all([client.getOverview(), client.listRuns()]);
+        const [nextOverview, nextRuns, nextNotifications, nextGithubAccounts, nextMonitors] = await Promise.all([
+          client.getOverview(),
+          client.listRuns(),
+          client.getNotifications(),
+          client.getGithubAccounts(),
+          client.getMonitors(),
+        ]);
 
         if (cancelled) {
           return;
@@ -32,6 +44,9 @@ export function useMonitorDashboard(client: MonitorClient) {
 
         setOverview(nextOverview);
         setRuns(nextRuns);
+        setNotifications(normalizeNotifications(nextNotifications));
+        setGithubAccounts(nextGithubAccounts);
+        setMonitors(nextMonitors);
 
         setSelectedRunId(null);
         setSelectedRun(null);
@@ -57,14 +72,29 @@ export function useMonitorDashboard(client: MonitorClient) {
     };
   }, [client]);
 
+  useEffect(() => {
+    return client.subscribeToNotifications((notification) => {
+      setNotifications((current) => normalizeNotifications([notification, ...current]));
+    });
+  }, [client]);
+
   const refreshDashboard = async () => {
     setIsRefreshing(true);
 
     try {
-      const [nextOverview, nextRuns] = await Promise.all([client.getOverview(), client.listRuns()]);
+      const [nextOverview, nextRuns, nextNotifications, nextGithubAccounts, nextMonitors] = await Promise.all([
+        client.getOverview(),
+        client.listRuns(),
+        client.getNotifications(),
+        client.getGithubAccounts(),
+        client.getMonitors(),
+      ]);
 
       setOverview(nextOverview);
       setRuns(nextRuns);
+      setNotifications(normalizeNotifications(nextNotifications));
+      setGithubAccounts(nextGithubAccounts);
+      setMonitors(nextMonitors);
 
       const nextSelectedRunId = selectedRunId
         ? nextRuns.find((run) => run.id === selectedRunId)?.id ?? null
@@ -116,11 +146,38 @@ export function useMonitorDashboard(client: MonitorClient) {
 
   const selectedSummary = runs.find((run) => run.id === selectedRunId) ?? null;
 
+  const createMonitor = async (input: {
+    githubAccountId: string;
+    repository: string;
+  }) => {
+    const monitor = await client.createMonitor(input);
+    setMonitors((current) => [monitor, ...current.filter((item) => item.id !== monitor.id)]);
+    return monitor;
+  };
+
+  const listGithubRepositories = useCallback(
+    async (githubAccountId: string) => client.getGithubRepositories(githubAccountId),
+    [client],
+  );
+
+  const syncGithubAccounts = async () => {
+    const accounts = await client.syncGithubAccounts();
+    setGithubAccounts(accounts);
+    setError(null);
+    return accounts;
+  };
+
   return {
     error,
+    githubAccounts,
     isBootstrapping,
     isRefreshing,
+    listGithubRepositories,
+    monitors,
     overview,
+    notifications,
+    createMonitor,
+    syncGithubAccounts,
     refreshDashboard,
     runs,
     selectedEvents,
@@ -141,4 +198,20 @@ async function loadRunInspection(client: MonitorClient, runId: string) {
     detail,
     events: events.events,
   };
+}
+
+function normalizeNotifications(notifications: MonitorNotification[]) {
+  const seen = new Set<string>();
+  const unique: MonitorNotification[] = [];
+
+  for (const notification of notifications) {
+    if (seen.has(notification.id)) {
+      continue;
+    }
+
+    seen.add(notification.id);
+    unique.push({ ...notification, payload: { ...notification.payload } });
+  }
+
+  return unique.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
