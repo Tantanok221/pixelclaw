@@ -15,6 +15,8 @@ cp .env.example .env
 
 The web app talks to the Fastify backend in `packages/server`, and the backend invokes the agent runtime in `packages/agent`.
 
+By default, the web dev server runs on `http://127.0.0.1:4000` and the backend runs on `http://127.0.0.1:4001`.
+
 ## GitHub PR Monitor
 
 GitHub monitor support is optional and uses the locally authenticated GitHub CLI instead of a custom OAuth app.
